@@ -1,0 +1,319 @@
+\documentclass[10pt,twocolumn]{article}
+
+% ─── Packages ───────────────────────────────────────────────────────────────
+\usepackage[margin=0.75in, top=0.7in, bottom=0.7in]{geometry}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{lipsum}
+\usepackage{amsmath}
+
+% ─── Colors ──────────────────────────────────────────────────────────────────
+\definecolor{accentblue}{RGB}{30, 80, 160}
+\definecolor{lightgray}{RGB}{245, 245, 245}
+
+% ─── Section formatting ──────────────────────────────────────────────────────
+\titleformat{\section}
+  {\normalfont\bfseries\color{accentblue}}
+  {\thesection.}{0.5em}{}[\titlerule]
+
+\titlespacing{\section}{0pt}{6pt}{3pt}
+
+% ─── Hyperlinks ──────────────────────────────────────────────────────────────
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=accentblue,
+  citecolor=accentblue
+}
+
+% ─── List spacing ────────────────────────────────────────────────────────────
+\setlist[itemize]{leftmargin=*, nosep, topsep=2pt, itemsep=1pt}
+\setlist[enumerate]{leftmargin=*, nosep, topsep=2pt, itemsep=1pt}
+
+% ─── Header / Footer ─────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small\textcolor{accentblue}{\textbf{Project Proposal \& Progress Report}}}
+\fancyhead[R]{\small Quantum Computing Course}
+\fancyfoot[C]{\small\thepage}
+
+% ─── Paragraph spacing ───────────────────────────────────────────────────────
+\setlength{\parskip}{3pt}
+\setlength{\parindent}{0pt}
+
+% ════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ─── Title block (single column) ─────────────────────────────────────────────
+\twocolumn[{%
+  \begin{center}
+    {\large\bfseries\color{accentblue}
+      Replication and Barren Plateau Analysis of\\[2pt]
+      Quantum Long Short-Term Memory Networks}\\[6pt]
+    {\normalsize
+      \textbf{Gautam Gupta} \quad
+      \href{mailto:gautam23220@iiitd.ac.in}{\texttt{gautam23220@iiitd.ac.in}} \quad
+      Roll No.: \textbf{2023220}}\\[4pt]
+    {\small Indraprastha Institute of Information Technology Delhi (IIIT-Delhi)}
+  \end{center}
+  \vspace{4pt}
+  \hrule
+  \vspace{8pt}
+}]
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Quantum Machine Learning (QML) has emerged as a compelling intersection of quantum computing and classical machine learning, leveraging superposition and entanglement for pattern modelling. Among the proposed hybrid architectures, the \textbf{Quantum Long Short-Term Memory (QLSTM)} network~\cite{chen2020qlstm} replaces parametric linear transformations inside classical LSTM cells with \emph{Variational Quantum Circuits} (VQCs), offering theoretical expressibility advantages for sequence modelling.
+
+However, a fundamental and underexplored challenge in all VQC-based models is the \textbf{Barren Plateau (BP) phenomenon}. The seminal survey by Larocca et al.~\cite{larocca2024review} establishes that \emph{every component} of a variational quantum algorithm---the ansatz, initial state, observable, loss function, and hardware noise---can independently cause BPs, where the optimisation landscape becomes exponentially flat and featureless as system size grows. This is not merely a theoretical concern: on a BP, an exponentially large number of measurement shots is required to identify any loss-minimising direction, making training infeasible in practice. Despite this, the trainability of QLSTM under realistic circuit configurations has not been rigorously characterised.
+
+This project closes that gap. I perform a faithful replication of the QLSTM architecture and then conduct a systematic empirical study of BP onset within its VQC sub-circuits. Crucially, I evaluate and compare three concrete mitigation strategies, including the recent two-stage convex-initialisation framework of Boabang \& Gyamerah~\cite{boabang2026twostage}, which shapes the quantum energy landscape into a smooth basin before nonconvex refinement.
+
+The practical motivation is concrete: before investing resources in QLSTM for real-world tasks like \textbf{stock price forecasting} and \textbf{weather prediction}, a practitioner needs an evidence-based answer to---\emph{does this model actually train, and under what circuit configurations?}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Project Description}
+
+The project is structured in two tightly coupled phases.
+
+\subsubsection*{Phase 1 — Faithful Replication}
+I will implement the QLSTM architecture from Chen et al.~\cite{chen2020qlstm} using \texttt{PennyLane} and \texttt{PyTorch}. Each LSTM gate's linear transformation is replaced by a VQC sub-circuit using an angle-embedding layer followed by a strongly entangling ansatz. The primary benchmark is \textbf{stock price prediction} using daily closing prices from Yahoo Finance (e.g., S\&P~500 index). Weather forecasting (Delhi or Jena Climate dataset) is included as a stretch goal if time permits. A classical LSTM baseline with a \emph{matched parameter count} is trained for fair comparison on the primary benchmark.
+
+\subsubsection*{Phase 2 — Barren Plateau Analysis \& Mitigation}
+Guided by the taxonomy in Larocca et al.~\cite{larocca2024review}, I identify the specific BP sources active in QLSTM (ansatz expressibility and random initialisation) and measure \textbf{gradient variance} across VQC sub-circuits as a function of:
+\begin{itemize}
+  \item Circuit depth: $L \in \{1, 2, 4\}$
+  \item Qubit count: $n \in \{2, 4, 6\}$
+\end{itemize}
+Gradient variance is estimated over 200 random parameter initialisations per configuration. I will then implement and compare \textbf{two} mitigation strategies:
+\begin{enumerate}
+  \item \textbf{Identity-block initialisation} (Grant et al.~\cite{grant2019init}) — sub-circuits initialised so the net unitary is close to identity, keeping initial gradients non-negligible.
+  \item \textbf{Two-stage least squares} (Boabang \& Gyamerah~\cite{boabang2026twostage}) — a convex initialisation stage shapes the loss landscape into a smooth low-energy basin, followed by nonconvex refinement. This is the most recent (2026) mitigation framework in the literature.
+\end{enumerate}
+AI coding agents (as permitted by the course) will be used to accelerate boilerplate circuit construction and experiment scripting.
+
+\subsubsection*{Papers to Implement / Survey}
+\begin{enumerate}
+  \item Chen et al.\ (2020). \emph{Quantum Long Short-Term Memory}. \href{https://arxiv.org/abs/2009.01783}{arXiv:2009.01783} --- primary architecture to replicate.
+  \item Larocca et al.\ (2024). \emph{Barren Plateaus in Variational Quantum Computing: A Review}. \href{https://arxiv.org/abs/2405.00781}{arXiv:2405.00781} --- unified theoretical framework for BP sources and mitigations; primary reference for Phase 2 design.
+  \item Boabang \& Gyamerah (2026). \emph{Overcoming Barren Plateaus via a Two-Step Least Squares Approach}. \href{https://arxiv.org/abs/2601.18060}{arXiv:2601.18060} --- mitigation strategy 2; novel two-stage optimisation framework.
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Expected Outcome}
+
+By the end of the project, I will produce:
+\begin{itemize}
+  \item A working \texttt{PennyLane}/\texttt{PyTorch} QLSTM implementation reproducing the key results of Chen et al.\ on the stock price benchmark.
+  \item Gradient variance plots across circuit depths $L \in \{1,2,4\}$ and qubit counts $n \in \{2,4,6\}$, characterising BP onset and cross-referenced with the taxonomy of Larocca et al.~\cite{larocca2024review}.
+  \item A comparison of \textbf{two} mitigation strategies (identity-block initialisation and two-stage least squares) with training loss curves and final MAE/RMSE.
+  \item A quantitative QLSTM vs.\ classical LSTM comparison table: prediction error, parameter count, and training time.
+  \item A clear, honest assessment of which circuit configurations make QLSTM trainable, grounded in BP theory.
+\end{itemize}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Midterm Deliverables}
+% \textit{(Target: $\sim$15 hours of work; in-class presentation + report)}
+
+\begin{itemize}
+  \item Reading notes for all three papers, with a written summary of the BP taxonomy from Larocca et al.
+  \item Working QLSTM implementation that trains on a toy dataset (sine wave) confirms circuit wiring and gradient flow are correct.
+  \item Classical LSTM baseline with matched parameter count on the stock price dataset.
+  \item Preliminary gradient variance measurements at $n \in \{2, 4\}$ qubits and $L \in \{1, 2\}$ layers, confirming the experimental setup is reproducible.
+\end{itemize}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Final Deliverables}
+% \textit{(Target: $\sim$20 hours of work; viva/demo + presentation + report)}
+
+\begin{itemize}
+  \item Full QLSTM replication on the stock price dataset with a classical LSTM comparison table (MAE, RMSE, parameter count, training time). Weather forecasting included as a stretch goal.
+  \item Complete BP analysis: gradient variance plots across $L \in \{1,2,4\}$ and $n \in \{2,4,6\}$, annotated using BP-source taxonomy from Larocca et al.
+  \item Comparison of both mitigation strategies (identity-block initialisation and two-stage least squares) with training loss curves and final accuracy numbers.
+  \item Documented code repository with reproducible scripts, ready for demo during viva.
+  \item Final report and presentation summarising all results and conclusions.
+\end{itemize}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+% ════════════════════════════════════════════════════════════════════════════
+%                        PROGRESS REPORT
+% ════════════════════════════════════════════════════════════════════════════
+% ════════════════════════════════════════════════════════════════════════════
+
+\vspace{6pt}
+\begin{center}
+\rule{0.8\linewidth}{0.8pt}\\[4pt]
+{\large\bfseries\color{accentblue} Progress Report}\\[2pt]
+\rule{0.8\linewidth}{0.8pt}
+\end{center}
+\vspace{4pt}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Papers Read}
+
+\subsubsection*{1.\ Quantum Long Short-Term Memory}
+\textbf{Authors:} Samuel Yen-Chi Chen, Shinjae Yoo, Yao-Lung L.\ Fang\\
+\textbf{Venue:} arXiv preprint, arXiv:2009.01783 (2020)
+
+The paper proposes QLSTM by replacing each linear transformation in the four LSTM gates (forget, input, cell, output) with a Variational Quantum Circuit (VQC). Each VQC first prepares qubits from the ground state using angle embedding (analogous to QFT/Hadamard for state preparation), then applies parameterised strongly entangling layers. Gradient computation uses the parameter shift rule ($\pm\pi/2$ shifts), which integrates with classical backpropagation via the chain rule to optimise the full hybrid model end-to-end.
+
+\subsubsection*{2.\ Barren Plateaus in Variational Quantum Computing: A Review}
+\textbf{Authors:} Martin Larocca, Supanut Thanasilp, Samson Wang, Kunal Sharma, Jacob Biamonte, Patrick J.\ Coles, Lukasz Cincio, Jarrod R.\ McClean, Zo\"{e} Holmes, M.\ Cerezo\\
+\textbf{Venue:} arXiv preprint, arXiv:2405.00781 (2024)
+
+This comprehensive review establishes a unified taxonomy of barren plateau (BP) sources in variational quantum algorithms. The core result is that the variance of the loss gradient $\text{Var}[\partial L/\partial\theta]$ shrinks exponentially as $O(1/2^n)$ with qubit count $n$, making gradient-based optimisation infeasible for large circuits. BPs arise independently from ansatz expressibility, entanglement structure, noise, and choice of global vs.\ local cost functions.
+
+\subsubsection*{3.\ Overcoming Barren Plateaus via a Two-Step Least Squares Approach}
+\textbf{Authors:} Francis Boabang, Samuel A.\ Gyamerah\\
+\textbf{Venue:} arXiv preprint, arXiv:2601.18060 (2026)
+
+Proposes a two-stage optimisation framework to escape barren plateaus. Stage~1 uses regularised least squares (a convex problem) to find a good initial parameter region, shaping the loss landscape into a smooth basin. Stage~2 refines these parameters using unregularised gradient-based optimisation. This avoids the problem of random initialisation landing on exponentially flat regions of the landscape.
+
+\subsubsection*{4.\ Barren Plateaus in Quantum Neural Network Training Landscapes}
+\textbf{Authors:} Jarrod R.\ McClean, Sergio Boixo, Vadim N.\ Smelyanskiy, Ryan Babbush, Hartmut Neven\\
+\textbf{Venue:} \emph{Nature Communications}, 9(1):4812 (2018)
+
+Seminal paper providing the first rigorous proof that for sufficiently random parameterised quantum circuits, gradient magnitudes vanish exponentially with qubit count due to concentration of measure. Establishes the mathematical foundation showing why deep, randomly initialised VQCs become untrainable---the result that motivates all subsequent BP mitigation research.
+
+\subsubsection*{5.\ An Initialization Strategy for Addressing Barren Plateaus}
+\textbf{Authors:} Edward Grant, Leonard Wossnig, Mateusz Ostaszewski, Marcello Benedetti\\
+\textbf{Venue:} \emph{Quantum}, 3:214 (2019)
+
+Proposes initialising VQC parameters such that each circuit block approximates the identity operation, analogous to classical He/Xavier initialisation. This ensures the circuit starts in a non-flat region of the optimisation landscape with non-vanishing gradients, enabling successful training before the circuit explores more expressive regions.
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Summary of Key Ideas}
+
+The papers collectively address the challenge of training variational quantum circuits for machine learning. Three key themes emerge:
+
+\begin{enumerate}
+  \item \textbf{Hybrid Quantum-Classical Architectures:} Chen et al.\ demonstrate that VQCs can replace linear layers inside classical neural networks (specifically LSTMs). The parameter shift rule enables gradient computation through quantum circuits, which integrates with classical backpropagation via the chain rule---the $\pm\pi/2$ shift computes $\partial\langle O\rangle/\partial\theta$ (the quantum part), and PyTorch autograd handles $\partial L/\partial\langle O\rangle$ (the classical loss part).
+
+  \item \textbf{The Barren Plateau Problem:} McClean et al.\ (2018) and Larocca et al.\ (2024) establish that randomly initialised VQCs suffer from exponentially vanishing gradients as circuit size grows. This is a fundamental obstacle: simply scaling up quantum circuits does not improve performance without careful design. BP sources include circuit expressibility (too expressive $\Rightarrow$ approximate random unitary $\Rightarrow$ flat landscape), entanglement, hardware noise, and global cost functions.
+
+  \item \textbf{Mitigation Through Initialisation:} Both Grant et al.\ and Boabang \& Gyamerah address BPs through smarter initialisation. Grant et al.\ use identity-block initialisation (keeping initial unitaries near identity, analogous to classical He/Xavier), while Boabang \& Gyamerah use a two-stage approach where convex optimisation first finds a good starting region. Both ensure the optimiser begins where gradients are meaningful.
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Implementation Status}
+
+The following components have been implemented using \texttt{PennyLane}~(v0.42) and \texttt{PyTorch}~(v2.6):
+
+\begin{enumerate}
+  \item \textbf{QLSTM Architecture} (\texttt{src/qlstm.py}): Complete implementation of the Quantum LSTM from Chen et al., including VQC sub-circuits with angle embedding and strongly entangling layers, a QLSTM cell with four VQC-based gates (forget, input, cell, output), and a full model wrapper for sequence prediction.
+
+  \item \textbf{Classical LSTM Baseline} (\texttt{src/classical\_lstm.py}): Standard PyTorch LSTM for fair comparison with matched architecture.
+
+  \item \textbf{Sine Wave Training} (\texttt{src/train\_sine.py}): Toy benchmark training both QLSTM ($n{=}2$ qubits, $L{=}1$ layer) and classical LSTM on sine wave prediction, producing loss curves and prediction comparison plots. This confirms correct circuit wiring and gradient flow.
+
+  \item \textbf{Barren Plateau Analysis} (\texttt{src/barren\_plateau\_analysis.py}): Gradient variance measurement over 200 random initialisations across configurations $n \in \{2, 4\}$ qubits and $L \in \{1, 2\}$ layers. Preliminary results confirm the expected trend:
+\end{enumerate}
+
+\begin{center}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+\textbf{Qubits ($n$)} & \textbf{Layers ($L$)} & \textbf{Var$[\nabla_\theta L]$} \\
+\midrule
+2 & 1 & 0.0819 \\
+4 & 1 & 0.0259 \\
+2 & 2 & 0.0631 \\
+4 & 2 & 0.0166 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Gradient variance decreases ${\sim}3\text{--}4\times$ when going from $n{=}2$ to $n{=}4$ qubits, and also decreases with deeper circuits ($L{=}2$ vs.\ $L{=}1$), consistent with BP theory from Larocca et al.
+
+The sine wave toy benchmark confirms correct implementation:
+
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Metric} & \textbf{QLSTM} & \textbf{Classical LSTM} \\
+\midrule
+MSE & 0.4804 & 0.2198 \\
+MAE & 0.6320 & 0.4141 \\
+Parameters & 83 & 361 \\
+Training Time (s) & 349.0 & 0.2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The QLSTM trains successfully (loss decreases over epochs), confirming correct circuit wiring and gradient flow. The classical LSTM outperforms at this stage due to its higher parameter count and the limited training epochs used for the preliminary experiment.
+
+\smallskip
+\textbf{Repository:} \url{https://github.com/gautam2905/IQC-Project}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Refined Final Deliverable}
+
+Based on the literature review and initial implementation, the final deliverable is refined as follows:
+
+\begin{enumerate}
+  \item \textbf{Complete QLSTM replication} on the S\&P~500 stock price dataset with a classical LSTM comparison table reporting MAE, RMSE, parameter count, and training time.
+
+  \item \textbf{Systematic BP characterisation:} Gradient variance plots across $L \in \{1, 2, 4\}$ layers and $n \in \{2, 4, 6\}$ qubits, with each configuration annotated using the BP-source taxonomy from Larocca et al.\ (expressibility-induced vs.\ entanglement-induced BPs).
+
+  \item \textbf{Mitigation comparison:} Implementation and evaluation of two strategies---identity-block initialisation (Grant et al.) and two-stage least squares (Boabang \& Gyamerah)---compared via training loss curves, final prediction accuracy, and gradient variance before vs.\ after mitigation.
+
+  \item \textbf{Trainability guidelines:} A practical summary table mapping circuit configurations $(n, L)$ to trainability status (trainable / marginal / barren plateau), giving practitioners concrete guidance on when QLSTM is viable.
+
+  \item \textbf{Documented code repository} with reproducible experiment scripts and a demo-ready notebook for viva.
+\end{enumerate}
+
+
+% ─── References ──────────────────────────────────────────────────────────────
+\begin{thebibliography}{9}
+\small
+
+\bibitem{chen2020qlstm}
+S.\ Chen, S.\ Yoo, and Y.-L.\ Fang.
+\newblock Quantum long short-term memory.
+\newblock \emph{arXiv preprint arXiv:2009.01783}, 2020.
+\newblock \url{https://arxiv.org/abs/2009.01783}
+
+\bibitem{larocca2024review}
+M.\ Larocca, S.\ Thanasilp, S.\ Wang, K.\ Sharma, J.\ Biamonte, P.\ J.\ Coles,
+L.\ Cincio, J.\ R.\ McClean, Z.\ Holmes, and M.\ Cerezo.
+\newblock Barren plateaus in variational quantum computing: A review.
+\newblock \emph{arXiv preprint arXiv:2405.00781}, 2024.
+\newblock \url{https://arxiv.org/abs/2405.00781}
+
+\bibitem{mcclean2018barren}
+J.\ R.\ McClean, S.\ Boixo, V.\ N.\ Smelyanskiy, R.\ Babbush, and H.\ Neven.
+\newblock Barren plateaus in quantum neural network training landscapes.
+\newblock \emph{Nature Communications}, 9(1):4812, 2018.
+
+\bibitem{grant2019init}
+E.\ Grant, L.\ Wossnig, M.\ Ostaszewski, and M.\ Benedetti.
+\newblock An initialization strategy for addressing barren plateaus in parametrized quantum circuits.
+\newblock \emph{Quantum}, 3:214, 2019.
+
+\bibitem{boabang2026twostage}
+F.\ Boabang and S.\ A.\ Gyamerah.
+\newblock Overcoming barren plateaus in variational quantum circuits using a two-step least squares approach.
+\newblock \emph{arXiv preprint arXiv:2601.18060}, 2026.
+\newblock \url{https://arxiv.org/abs/2601.18060}
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,74 @@
+[
+  {
+    "n_qubits": 2,
+    "n_layers": 1,
+    "variance": 0.08817007374173252,
+    "max_variance": 0.4859775925380302,
+    "n_samples": 200,
+    "time_s": 2.0
+  },
+  {
+    "n_qubits": 4,
+    "n_layers": 1,
+    "variance": 0.026095244326671752,
+    "max_variance": 0.10682014168395754,
+    "n_samples": 200,
+    "time_s": 1.4
+  },
+  {
+    "n_qubits": 6,
+    "n_layers": 1,
+    "variance": 0.005575879963863016,
+    "max_variance": 0.02007276247068273,
+    "n_samples": 200,
+    "time_s": 2.1
+  },
+  {
+    "n_qubits": 2,
+    "n_layers": 2,
+    "variance": 0.06573670468262216,
+    "max_variance": 0.2155740590137509,
+    "n_samples": 200,
+    "time_s": 1.2
+  },
+  {
+    "n_qubits": 4,
+    "n_layers": 2,
+    "variance": 0.01401667303826664,
+    "max_variance": 0.06668519631955663,
+    "n_samples": 200,
+    "time_s": 2.4
+  },
+  {
+    "n_qubits": 6,
+    "n_layers": 2,
+    "variance": 0.008533759841602302,
+    "max_variance": 0.07116630306179003,
+    "n_samples": 200,
+    "time_s": 3.7
+  },
+  {
+    "n_qubits": 2,
+    "n_layers": 4,
+    "variance": 0.07995525125921386,
+    "max_variance": 0.1941689441190842,
+    "n_samples": 200,
+    "time_s": 2.1
+  },
+  {
+    "n_qubits": 4,
+    "n_layers": 4,
+    "variance": 0.023497367590267826,
+    "max_variance": 0.058119924690494776,
+    "n_samples": 200,
+    "time_s": 4.4
+  },
+  {
+    "n_qubits": 6,
+    "n_layers": 4,
+    "variance": 0.0047003672302436085,
+    "max_variance": 0.017303149894454438,
+    "n_samples": 200,
+    "time_s": 6.9
+  }
+]

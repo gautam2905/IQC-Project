@@ -1,0 +1,44 @@
+{
+  "1": {
+    "2": {
+      "variance": 0.08817007374173252,
+      "status": "Trainable"
+    },
+    "4": {
+      "variance": 0.026095244326671752,
+      "status": "Trainable"
+    },
+    "6": {
+      "variance": 0.005575879963863016,
+      "status": "Marginal"
+    }
+  },
+  "2": {
+    "2": {
+      "variance": 0.06573670468262216,
+      "status": "Trainable"
+    },
+    "4": {
+      "variance": 0.01401667303826664,
+      "status": "Trainable"
+    },
+    "6": {
+      "variance": 0.008533759841602302,
+      "status": "Marginal"
+    }
+  },
+  "4": {
+    "2": {
+      "variance": 0.07995525125921386,
+      "status": "Trainable"
+    },
+    "4": {
+      "variance": 0.023497367590267826,
+      "status": "Trainable"
+    },
+    "6": {
+      "variance": 0.0047003672302436085,
+      "status": "Marginal"
+    }
+  }
+}

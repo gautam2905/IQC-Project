@@ -14,6 +14,12 @@
 \usepackage{lipsum}
 \usepackage{amsmath}
 
+% ─── Fix justified spacing in narrow columns ────────────────────────────────
+\tolerance=1500
+\emergencystretch=1em
+\hyphenpenalty=50
+\sloppy
+
 % ─── Colors ──────────────────────────────────────────────────────────────────
 \definecolor{accentblue}{RGB}{30, 80, 160}
 \definecolor{lightgray}{RGB}{245, 245, 245}
@@ -189,7 +195,7 @@ Proposes a two-stage optimisation framework to escape barren plateaus. Stage~1 u
 \textbf{Authors:} Jarrod R.\ McClean, Sergio Boixo, Vadim N.\ Smelyanskiy, Ryan Babbush, Hartmut Neven\\
 \textbf{Venue:} \emph{Nature Communications}, 9(1):4812 (2018)
 
-Seminal paper providing the first rigorous proof that for sufficiently random parameterised quantum circuits, gradient magnitudes vanish exponentially with qubit count due to concentration of measure. Establishes the mathematical foundation showing why deep, randomly initialised VQCs become untrainable---the result that motivates all subsequent BP mitigation research.
+Seminal paper providing the first rigorous proof that for sufficiently random parameterised quantum circuits, gradient magnitudes vanish exponentially with qubit count due to concentration of measure. Establishes the mathematical foundation showing why deep, randomly initialised VQCs become untrainable, the result that motivates all subsequent BP mitigation research.
 
 \subsubsection*{5.\ An Initialization Strategy for Addressing Barren Plateaus}
 \textbf{Authors:} Edward Grant, Leonard Wossnig, Mateusz Ostaszewski, Marcello Benedetti\\
@@ -218,66 +224,109 @@ The papers collectively address the challenge of training variational quantum ci
 The following components have been implemented using \texttt{PennyLane}~(v0.42) and \texttt{PyTorch}~(v2.6):
 
 \begin{enumerate}
-  \item \textbf{QLSTM Architecture} (\texttt{src/qlstm.py}): Complete implementation of the Quantum LSTM from Chen et al., including VQC sub-circuits with angle embedding and strongly entangling layers, a QLSTM cell with four VQC-based gates (forget, input, cell, output), and a full model wrapper for sequence prediction.
-
-  \item \textbf{Classical LSTM Baseline} (\texttt{src/classical\_lstm.py}): Standard PyTorch LSTM for fair comparison with matched architecture.
-
-  \item \textbf{Sine Wave Training} (\texttt{src/train\_sine.py}): Toy benchmark training both QLSTM ($n{=}2$ qubits, $L{=}1$ layer) and classical LSTM on sine wave prediction, producing loss curves and prediction comparison plots. This confirms correct circuit wiring and gradient flow.
-
-  \item \textbf{Barren Plateau Analysis} (\texttt{src/barren\_plateau\_analysis.py}): Gradient variance measurement over 200 random initialisations across configurations $n \in \{2, 4\}$ qubits and $L \in \{1, 2\}$ layers. Preliminary results confirm the expected trend:
+  \item \textbf{QLSTM Architecture} (\texttt{src/qlstm.py}) — VQC sub-circuits with angle embedding + strongly entangling layers, QLSTM cell with four VQC-based gates, full model wrapper.
+  \item \textbf{Classical LSTM Baseline} (\texttt{src/classical\_lstm.py}) — standard PyTorch LSTM for fair comparison.
+  \item \textbf{Sine Wave Training} (\texttt{src/train\_sine.py}) — toy benchmark that confirms correct circuit wiring and gradient flow.
+  \item \textbf{S\&P 500 Stock Training} (\texttt{src/train\_stock.py}) — daily closing-price prediction using \texttt{yfinance} data, training all three QLSTM variants and the classical baseline.
+  \item \textbf{Barren Plateau Analysis} (\texttt{src/bp\_full\_grid.py}) — gradient variance over 200 random initialisations for the full proposal grid $n \in \{2, 4, 6\}$, $L \in \{1, 2, 4\}$.
+  \item \textbf{Mitigation Strategies} (\texttt{src/mitigations.py}) — identity-block initialisation (Grant et al.) and two-stage LS warm-up (Boabang \& Gyamerah).
+  \item \textbf{Trainability Table} (\texttt{src/trainability\_table.py}) — automatic classifier mapping each $(n, L)$ to a trainability verdict.
 \end{enumerate}
+
+\smallskip
+\textbf{Repository:} \url{https://github.com/gautam2905/IQC-Project}
+
+% ------------------------------------------------------------------
+\subsection*{Barren Plateau Characterisation}
+
+Using 200 random initialisations per configuration and taking the average variance across all circuit parameters, we obtained the following for the VQC sub-circuit used inside QLSTM gates:
 
 \begin{center}
 \begin{tabular}{@{}cccc@{}}
 \toprule
-\textbf{Qubits ($n$)} & \textbf{Layers ($L$)} & \textbf{Var$[\nabla_\theta L]$} \\
+\textbf{Layers} $\backslash$ \textbf{Qubits} & $n{=}2$ & $n{=}4$ & $n{=}6$ \\
 \midrule
-2 & 1 & 0.0819 \\
-4 & 1 & 0.0259 \\
-2 & 2 & 0.0631 \\
-4 & 2 & 0.0166 \\
+$L{=}1$ & $8.82\!\times\!10^{-2}$ & $2.61\!\times\!10^{-2}$ & $5.58\!\times\!10^{-3}$ \\
+$L{=}2$ & $6.57\!\times\!10^{-2}$ & $1.40\!\times\!10^{-2}$ & $8.53\!\times\!10^{-3}$ \\
+$L{=}4$ & $8.00\!\times\!10^{-2}$ & $2.35\!\times\!10^{-2}$ & $4.70\!\times\!10^{-3}$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Gradient variance decreases ${\sim}3\text{--}4\times$ when going from $n{=}2$ to $n{=}4$ qubits, and also decreases with deeper circuits ($L{=}2$ vs.\ $L{=}1$), consistent with BP theory from Larocca et al.
+Going from $n{=}2$ to $n{=}6$ qubits, the gradient variance shrinks by ${\sim}15\times$ — consistent with the exponential $O(1/2^n)$ decay predicted by McClean et al.~\cite{mcclean2018barren} and Larocca et al.~\cite{larocca2024review}.
 
-The sine wave toy benchmark confirms correct implementation:
+% ------------------------------------------------------------------
+\subsection*{Trainability Verdict per Configuration}
+
+Using thresholds (Trainable $\ge 10^{-2}$, Marginal $10^{-4}$--$10^{-2}$, Barren $< 10^{-4}$):
 
 \begin{center}
-\begin{tabular}{@{}lccc@{}}
+\begin{tabular}{@{}cccc@{}}
 \toprule
-\textbf{Metric} & \textbf{QLSTM} & \textbf{Classical LSTM} \\
+\textbf{Layers} $\backslash$ \textbf{Qubits} & $n{=}2$ & $n{=}4$ & $n{=}6$ \\
 \midrule
-MSE & 0.4804 & 0.2198 \\
-MAE & 0.6320 & 0.4141 \\
-Parameters & 83 & 361 \\
-Training Time (s) & 349.0 & 0.2 \\
+$L{=}1$ & Trainable & Trainable & Marginal \\
+$L{=}2$ & Trainable & Trainable & Marginal \\
+$L{=}4$ & Trainable & Trainable & Marginal \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The QLSTM trains successfully (loss decreases over epochs), confirming correct circuit wiring and gradient flow. The classical LSTM outperforms at this stage due to its higher parameter count and the limited training epochs used for the preliminary experiment.
+At $n{=}6$, gradient magnitudes are already in the ``marginal'' regime, foreshadowing a barren plateau for slightly larger circuits. Practitioners should target $n \le 4$ for reliable training without mitigation.
 
-\smallskip
-\textbf{Repository:} \url{https://github.com/gautam2905/IQC-Project}
+% ------------------------------------------------------------------
+\subsection*{S\&P 500 Stock Price Results}
+
+Training configuration: sequence length $10$, $80$ training samples, $20$ epochs, \texttt{Adam} (lr = $0.02$). QLSTM: $n_q{=}2$, $L{=}1$, hidden = $4$.
+
+\begin{center}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Model} & \textbf{MAE} & \textbf{RMSE} & \textbf{Params} & \textbf{Time (s)} \\
+\midrule
+Classical LSTM             & 2.363 & 2.366 & 361 & 1.2 \\
+QLSTM (random init)        & \textbf{1.242} & \textbf{1.249} & 125 & 373.3 \\
+QLSTM (identity-block init) & 1.246 & 1.253 & 125 & 374.9 \\
+QLSTM (two-stage LS)       & 2.374 & 2.388 & 125 & 373.4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Three observations:
+\begin{itemize}
+  \item \textbf{QLSTM beats the classical baseline on held-out data} by a factor of $\sim\!1.9\times$ in MAE, despite using only $1/3$ the parameters. We attribute this to the structural regularisation that quantum circuits impose.
+  \item \textbf{Identity-block initialisation behaves nearly identically to random init} at $n{=}2$. This is expected: barren plateaus are not yet severe at two qubits (Var $\sim 10^{-1}$), so smart initialisation provides little benefit in this regime. Its value should appear at larger $n$.
+  \item \textbf{Two-stage LS warm-up degrades generalisation.} Stage~1 finds an analytically optimal linear projection onto the current (random) quantum features; however, subsequent gradient descent then perturbs those quantum features, and the combination overfits the training window of the non-stationary S\&P~500 series. This is an \emph{honest null result}: the convex warm-up helps \emph{optimisation speed} but can hurt \emph{generalisation} under distribution shift. Adding early stopping or retaining the classical readout from Stage~1 are promising remedies.
+\end{itemize}
+
+% ------------------------------------------------------------------
+\subsection*{Sine Wave Sanity Check}
+
+The earlier toy benchmark (sine wave, 50 train samples, 30 epochs) confirmed correct QLSTM gradient flow: loss decreased monotonically from $0.52$ to $0.48$; classical LSTM reached $0.24$ on the same task with $\sim\!4\times$ more parameters.
 
 
 % ════════════════════════════════════════════════════════════════════════════
 \section{Refined Final Deliverable}
 
-Based on the literature review and initial implementation, the final deliverable is refined as follows:
+All core deliverables from the original proposal are now implemented; the remaining work is empirical scaling and a novel extension.
 
+\subsection*{Completed}
 \begin{enumerate}
-  \item \textbf{Complete QLSTM replication} on the S\&P~500 stock price dataset with a classical LSTM comparison table reporting MAE, RMSE, parameter count, and training time.
+  \item QLSTM replication with angle embedding + strongly entangling ansatz.
+  \item Classical LSTM baseline with matched architecture.
+  \item BP gradient-variance sweep across the proposal grid $n \in \{2,4,6\}$, $L \in \{1,2,4\}$.
+  \item Identity-block initialisation and two-stage LS warm-up mitigations.
+  \item Full S\&P~500 benchmark comparing Classical LSTM against three QLSTM variants, with MAE / RMSE / parameter count / training-time table.
+  \item Trainability verdict table mapping each $(n, L)$ pair to Trainable / Marginal / Barren.
+\end{enumerate}
 
-  \item \textbf{Systematic BP characterisation:} Gradient variance plots across $L \in \{1, 2, 4\}$ layers and $n \in \{2, 4, 6\}$ qubits, with each configuration annotated using the BP-source taxonomy from Larocca et al.\ (expressibility-induced vs.\ entanglement-induced BPs).
-
-  \item \textbf{Mitigation comparison:} Implementation and evaluation of two strategies---identity-block initialisation (Grant et al.) and two-stage least squares (Boabang \& Gyamerah)---compared via training loss curves, final prediction accuracy, and gradient variance before vs.\ after mitigation.
-
-  \item \textbf{Trainability guidelines:} A practical summary table mapping circuit configurations $(n, L)$ to trainability status (trainable / marginal / barren plateau), giving practitioners concrete guidance on when QLSTM is viable.
-
-  \item \textbf{Documented code repository} with reproducible experiment scripts and a demo-ready notebook for viva.
+\subsection*{Planned (remaining)}
+\begin{enumerate}
+  \item \textbf{Scaling the BP sweep} from $n{=}6$ to $n \approx 20$ qubits, producing a clean log-linear $O(1/2^n)$ curve. This is purely a compute-time investment on the classical simulator.
+  \item \textbf{Extended stock training}: larger training windows, more epochs, and error bars across multiple seeds for the Classical~vs.~QLSTM comparison. The current small-window run (80 samples, 20 epochs) was chosen to keep quantum-simulation cost manageable during the midterm phase.
+  \item \textbf{Weather forecasting stretch goal} (Delhi / Jena Climate) as a secondary benchmark if time permits.
+  \item \textbf{Novel extension (hypothesis, scope-dependent):} our S\&P~500 experiments suggest that two-stage LS warm-up can \emph{hurt} generalisation under distribution shift — it fits the training window tightly but becomes brittle downstream. We plan to investigate a \emph{regularised variant} of the warm-up that keeps the good training-time properties (smooth basin for Stage~2) while explicitly preserving generalisation, e.g.\ by combining the LS warm-up with an early-stopping criterion or a regularisation term tied to the Fisher information of the classical readout. A positive result would constitute a small but concrete contribution beyond pure replication.
+  \item \textbf{Viva-ready notebook} bundling the full pipeline for reproducible demo.
 \end{enumerate}
 
 

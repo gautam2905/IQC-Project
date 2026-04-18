@@ -79,12 +79,20 @@ def main():
 
     EPOCHS = 20
 
-    # --- Classical LSTM baseline ---
+    # --- Classical LSTM (larger, hidden=8) ---
     classical = ClassicalLSTM(input_size=1, hidden_size=8, output_size=1)
     cls_loss, cls_time, cls_params = train(classical, X_tr, y_tr,
                                            epochs=EPOCHS, lr=0.02,
-                                           name="Classical LSTM")
+                                           name="Classical LSTM (h=8)")
     cls_pred, cls_true, cls_metrics = evaluate(classical, X_te, y_te)
+
+    # --- Classical LSTM (parameter-matched, hidden=4, ~101 params vs QLSTM 125) ---
+    np.random.seed(0); torch.manual_seed(0)
+    classical_sm = ClassicalLSTM(input_size=1, hidden_size=4, output_size=1)
+    cls_sm_loss, cls_sm_time, cls_sm_params = train(classical_sm, X_tr, y_tr,
+                                                     epochs=EPOCHS, lr=0.02,
+                                                     name="Classical LSTM matched (h=4)")
+    cls_sm_pred, _, cls_sm_metrics = evaluate(classical_sm, X_te, y_te)
 
     # --- QLSTM random init (baseline) ---
     np.random.seed(0); torch.manual_seed(0)
@@ -118,13 +126,15 @@ def main():
 
     # --- Save JSON metrics ---
     summary = {
-        "classical_lstm": {"params": cls_params, "time_s": round(cls_time, 1),
-                           **cls_metrics},
-        "qlstm_random":   {"params": q_rand_params, "time_s": round(q_rand_time, 1),
-                           **q_rand_metrics},
-        "qlstm_identity": {"params": q_id_params, "time_s": round(q_id_time, 1),
-                           **q_id_metrics},
-        "qlstm_two_stage_ls": {"params": q_ls_params, "time_s": round(q_ls_time, 1),
+        "classical_lstm_h8":  {"params": cls_params,    "time_s": round(cls_time, 1),
+                               **cls_metrics},
+        "classical_lstm_matched": {"params": cls_sm_params, "time_s": round(cls_sm_time, 1),
+                               **cls_sm_metrics},
+        "qlstm_random":       {"params": q_rand_params, "time_s": round(q_rand_time, 1),
+                               **q_rand_metrics},
+        "qlstm_identity":     {"params": q_id_params,   "time_s": round(q_id_time, 1),
+                               **q_id_metrics},
+        "qlstm_two_stage_ls": {"params": q_ls_params,   "time_s": round(q_ls_time, 1),
                                **q_ls_metrics},
         "train_samples": N_TRAIN, "test_samples": N_TEST, "epochs": EPOCHS,
     }
@@ -134,24 +144,26 @@ def main():
     print("\n" + "=" * 60)
     print("Final Stock Price Benchmark (S&P 500)")
     print("=" * 60)
-    print(f"{'Model':<26} {'MAE':>10} {'RMSE':>10} {'Params':>8} {'Time(s)':>10}")
-    print("-" * 66)
+    print(f"{'Model':<30} {'MAE':>10} {'RMSE':>10} {'Params':>8} {'Time(s)':>10}")
+    print("-" * 70)
     for key, label in [
-        ("classical_lstm",    "Classical LSTM"),
-        ("qlstm_random",      "QLSTM random init"),
-        ("qlstm_identity",    "QLSTM identity init"),
-        ("qlstm_two_stage_ls","QLSTM two-stage LS"),
+        ("classical_lstm_h8",      "Classical LSTM (h=8)"),
+        ("classical_lstm_matched", "Classical LSTM matched (h=4)"),
+        ("qlstm_random",           "QLSTM random init"),
+        ("qlstm_identity",         "QLSTM identity init"),
+        ("qlstm_two_stage_ls",     "QLSTM two-stage LS"),
     ]:
         s = summary[key]
-        print(f"{label:<26} {s['mae']:>10.4f} {s['rmse']:>10.4f} "
+        print(f"{label:<30} {s['mae']:>10.4f} {s['rmse']:>10.4f} "
               f"{s['params']:>8} {s['time_s']:>10.1f}")
 
     # --- Plot loss curves ---
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.plot(cls_loss,     label="Classical LSTM",        linewidth=2)
-    ax.plot(q_rand_loss,  label="QLSTM (random init)",   linewidth=2)
-    ax.plot(q_id_loss,    label="QLSTM (identity init)", linewidth=2)
-    ax.plot(q_ls_loss,    label="QLSTM (two-stage LS)",  linewidth=2)
+    ax.plot(cls_loss,     label="Classical LSTM (h=8)",        linewidth=2)
+    ax.plot(cls_sm_loss,  label="Classical LSTM matched (h=4)", linewidth=2, linestyle="--")
+    ax.plot(q_rand_loss,  label="QLSTM (random init)",         linewidth=2)
+    ax.plot(q_id_loss,    label="QLSTM (identity init)",        linewidth=2)
+    ax.plot(q_ls_loss,    label="QLSTM (two-stage LS)",         linewidth=2)
     ax.set_xlabel("Epoch", fontsize=12)
     ax.set_ylabel("MSE Loss", fontsize=12)
     ax.set_title("S&P 500 Training Loss — Mitigation Comparison", fontsize=13)
@@ -164,11 +176,12 @@ def main():
 
     # --- Plot predictions ---
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(cls_true,    "k-",  label="Ground truth",      linewidth=2)
-    ax.plot(cls_pred,    "r--", label=f"Classical (MAE={cls_metrics['mae']:.3f})")
-    ax.plot(q_rand_pred, "b--", label=f"QLSTM rand (MAE={q_rand_metrics['mae']:.3f})")
-    ax.plot(q_id_pred,   "g--", label=f"QLSTM identity (MAE={q_id_metrics['mae']:.3f})")
-    ax.plot(q_ls_pred,   "m--", label=f"QLSTM LS (MAE={q_ls_metrics['mae']:.3f})")
+    ax.plot(cls_true,     "k-",  label="Ground truth",                          linewidth=2)
+    ax.plot(cls_pred,     "r--", label=f"Classical h=8 (MAE={cls_metrics['mae']:.3f})")
+    ax.plot(cls_sm_pred,  "r:",  label=f"Classical h=4 matched (MAE={cls_sm_metrics['mae']:.3f})")
+    ax.plot(q_rand_pred,  "b--", label=f"QLSTM rand (MAE={q_rand_metrics['mae']:.3f})")
+    ax.plot(q_id_pred,    "g--", label=f"QLSTM identity (MAE={q_id_metrics['mae']:.3f})")
+    ax.plot(q_ls_pred,    "m--", label=f"QLSTM LS (MAE={q_ls_metrics['mae']:.3f})")
     ax.set_xlabel("Time Step (test set)")
     ax.set_ylabel("Normalised Price")
     ax.set_title("S&P 500 Prediction — QLSTM vs Classical")

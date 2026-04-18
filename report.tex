@@ -284,19 +284,21 @@ Training configuration: sequence length $10$, $80$ training samples, $20$ epochs
 \toprule
 \textbf{Model} & \textbf{MAE} & \textbf{RMSE} & \textbf{Params} & \textbf{Time (s)} \\
 \midrule
-Classical LSTM             & 2.363 & 2.366 & 361 & 1.2 \\
-QLSTM (random init)        & \textbf{1.242} & \textbf{1.249} & 125 & 373.3 \\
-QLSTM (identity-block init) & 1.246 & 1.253 & 125 & 374.9 \\
-QLSTM (two-stage LS)       & 2.374 & 2.388 & 125 & 373.4 \\
+Classical LSTM (h=8)             & 2.363 & 2.367 & 361 & 28.3 \\
+Classical LSTM matched (h=4)     & 2.000 & 2.001 & 117 & 26.3 \\
+QLSTM (random init)              & \textbf{1.242} & \textbf{1.249} & 125 & 528.0 \\
+QLSTM (identity-block init)      & 1.246 & 1.253 & 125 & 523.1 \\
+QLSTM (two-stage LS)             & 2.374 & 2.389 & 125 & 533.4 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Three observations:
+The parameter-matched comparison uses Classical LSTM with \texttt{hidden\_size=4} (117 params) against QLSTM with $n_q{=}2$, $L{=}1$ (125 params) — a near-identical parameter budget. Three observations:
+
 \begin{itemize}
-  \item \textbf{QLSTM beats the classical baseline on held-out data} by a factor of $\sim\!1.9\times$ in MAE, despite using only $1/3$ the parameters. We attribute this to the structural regularisation that quantum circuits impose.
-  \item \textbf{Identity-block initialisation behaves nearly identically to random init} at $n{=}2$. This is expected: barren plateaus are not yet severe at two qubits (Var $\sim 10^{-1}$), so smart initialisation provides little benefit in this regime. Its value should appear at larger $n$.
-  \item \textbf{Two-stage LS warm-up degrades generalisation.} Stage~1 finds an analytically optimal linear projection onto the current (random) quantum features; however, subsequent gradient descent then perturbs those quantum features, and the combination overfits the training window of the non-stationary S\&P~500 series. This is an \emph{honest null result}: the convex warm-up helps \emph{optimisation speed} but can hurt \emph{generalisation} under distribution shift. Adding early stopping or retaining the classical readout from Stage~1 are promising remedies.
+  \item \textbf{QLSTM beats the size-matched classical baseline by ${\sim}37\%$ in MAE} (1.242 vs 2.000) with essentially the same parameter count (125 vs 117). This is a strong result: at small circuit sizes, QLSTM's quantum expressibility provides a genuine advantage over an equivalently sized classical model on this non-stationary time series.
+  \item \textbf{Identity-block initialisation behaves nearly identically to random init} at $n{=}2$. This is expected: barren plateaus are not yet severe at two qubits (Var $\sim 10^{-1}$), so smart initialisation provides little benefit in this regime. Its value should become apparent at larger $n$ where BP is a real obstacle.
+  \item \textbf{Two-stage LS warm-up degrades generalisation.} Stage~1 finds an analytically optimal linear projection onto the current (random) quantum features; however, subsequent gradient descent perturbs those quantum features, and the combination overfits the training window of the non-stationary S\&P~500 series. This is an \emph{honest null result}: the convex warm-up may help \emph{optimisation speed} but can hurt \emph{generalisation} under distribution shift. A regularised variant of the warm-up is proposed as the novel extension.
 \end{itemize}
 
 % ------------------------------------------------------------------

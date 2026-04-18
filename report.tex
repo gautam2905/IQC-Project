@@ -13,6 +13,7 @@
 \usepackage{fancyhdr}
 \usepackage{lipsum}
 \usepackage{amsmath}
+\usepackage{amssymb}
 
 % ─── Fix justified spacing in narrow columns ────────────────────────────────
 \tolerance=1500
@@ -330,6 +331,174 @@ All core deliverables from the original proposal are now implemented; the remain
   \item \textbf{Novel extension (hypothesis, scope-dependent):} our S\&P~500 experiments suggest that two-stage LS warm-up can \emph{hurt} generalisation under distribution shift — it fits the training window tightly but becomes brittle downstream. We plan to investigate a \emph{regularised variant} of the warm-up that keeps the good training-time properties (smooth basin for Stage~2) while explicitly preserving generalisation, e.g.\ by combining the LS warm-up with an early-stopping criterion or a regularisation term tied to the Fisher information of the classical readout. A positive result would constitute a small but concrete contribution beyond pure replication.
   \item \textbf{Viva-ready notebook} bundling the full pipeline for reproducible demo.
 \end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+% ════════════════════════════════════════════════════════════════════════════
+%                          FINAL REPORT
+% ════════════════════════════════════════════════════════════════════════════
+% ════════════════════════════════════════════════════════════════════════════
+
+\vspace{6pt}
+\begin{center}
+\rule{0.8\linewidth}{0.8pt}\\[4pt]
+{\large\bfseries\color{accentblue} Final Report}\\[2pt]
+{\small Date of Submission: \today}\\[2pt]
+\rule{0.8\linewidth}{0.8pt}
+\end{center}
+\vspace{4pt}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Problem Statement}
+
+Variational Quantum Circuits (VQCs) have been proposed as drop-in replacements for the linear layers inside classical recurrent architectures. The Quantum Long Short-Term Memory (QLSTM) network of Chen et al.\ \cite{chen2020qlstm} is the most prominent such hybrid: it swaps all four LSTM gate transformations for VQCs and claims expressibility advantages on sequence tasks. However, VQC-based models are known to suffer from the \textbf{Barren Plateau (BP)} phenomenon, where the gradient of the loss function vanishes exponentially with the number of qubits, making training infeasible at scale.
+
+This project addresses two tightly linked questions:
+\begin{enumerate}
+  \item \textbf{Does QLSTM actually train?} We faithfully replicate the architecture and benchmark it against a parameter-matched classical LSTM on S\&P~500 stock price prediction.
+  \item \textbf{Under what circuit configurations does BP onset occur?} We characterise gradient variance across circuit depths $L \in \{1,2,4\}$ and qubit counts $n \in \{2,4,6\}$, and evaluate two mitigation strategies — identity-block initialisation (Grant et al.\ \cite{grant2019init}) and two-stage least-squares warm-up (Boabang \& Gyamerah \cite{boabang2026twostage}) — against the random-init baseline.
+\end{enumerate}
+
+The practical outcome is a concrete answer to a question any practitioner would ask before deploying QLSTM: \textit{which circuit configurations are trainable, and do mitigation strategies help?}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Papers}
+
+\begin{enumerate}
+
+\item \textbf{Quantum Long Short-Term Memory}\\
+S.\ Y.-C.\ Chen, S.\ Yoo, Y.-L.\ L.\ Fang\\
+arXiv preprint, arXiv:2009.01783, 2020
+
+\item \textbf{Barren Plateaus in Variational Quantum Computing: A Review}\\
+M.\ Larocca, S.\ Thanasilp, S.\ Wang, K.\ Sharma, J.\ Biamonte, P.\ J.\ Coles,
+L.\ Cincio, J.\ R.\ McClean, Z.\ Holmes, M.\ Cerezo\\
+arXiv preprint, arXiv:2405.00781, 2024
+
+\item \textbf{Overcoming Barren Plateaus in Variational Quantum Circuits Using a Two-Step Least Squares Approach}\\
+F.\ Boabang, S.\ A.\ Gyamerah\\
+arXiv preprint, arXiv:2601.18060, 2026
+
+\item \textbf{Barren Plateaus in Quantum Neural Network Training Landscapes}\\
+J.\ R.\ McClean, S.\ Boixo, V.\ N.\ Smelyanskiy, R.\ Babbush, H.\ Neven\\
+\textit{Nature Communications}, 9(1):4812, 2018
+
+\item \textbf{An Initialization Strategy for Addressing Barren Plateaus in Parametrized Quantum Circuits}\\
+E.\ Grant, L.\ Wossnig, M.\ Ostaszewski, M.\ Benedetti\\
+\textit{Quantum}, 3:214, 2019
+
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Methodology}
+
+\subsection*{Module 1 — QLSTM (\texttt{src/qlstm.py})}
+
+Implements the architecture of Chen et al.\ using PennyLane and PyTorch. The key class hierarchy is:
+
+\begin{itemize}
+  \item \textbf{\texttt{VQC}}: A single variational quantum circuit. Takes a classical input vector, projects it to $n$ qubits via a trainable \texttt{Linear} pre-net, applies \texttt{AngleEmbedding} (Y-rotation encoding), then \texttt{StronglyEntanglingLayers} ($L$ layers of parameterised rotations + CNOT ring), and returns $n$ expectation values $\langle Z_i \rangle$ projected back to the required output dimension via a trainable \texttt{Linear} post-net.
+  \item \textbf{\texttt{QLSTMCell}}: Instantiates four independent \texttt{VQC}s — one per LSTM gate (forget, input, cell candidate, output) — and reproduces the standard LSTM update equations with those VQCs in place of the classical weight matrices.
+  \item \textbf{\texttt{QLSTM}}: Wraps the cell into a sequence model; iterates over the time dimension and produces a final prediction from the last hidden state.
+\end{itemize}
+
+Gradient computation uses PennyLane's \texttt{backprop} method (which applies the parameter shift rule internally) and integrates with PyTorch autograd via the chain rule, enabling end-to-end training with standard optimisers.
+
+\subsection*{Module 2 — Classical LSTM (\texttt{src/classical\_lstm.py})}
+
+Standard \texttt{torch.nn.LSTM} wrapper. Two instances are used in experiments: a larger model (\texttt{hidden\_size=8}, 361 params) and a \emph{parameter-matched} model (\texttt{hidden\_size=4}, 117 params) for a fair comparison against QLSTM (125 params).
+
+\subsection*{Module 3 — Barren Plateau Analysis (\texttt{src/bp\_full\_grid.py})}
+
+For each $(n, L)$ configuration in the proposal grid, runs 200 forward-backward passes with random parameter and input initialisations. Collects the full gradient tensor per pass and computes the per-parameter variance, then averages across all parameters. This \emph{mean-over-all-parameters} metric is a specific implementation choice: using only the first parameter gives structural zeros for single-layer circuits (a Z-rotation applied before a Z-measurement contributes no gradient), so the mean is more representative and robust.
+
+\subsection*{Module 4 — Mitigation Strategies (\texttt{src/mitigations.py})}
+
+Two functions:
+
+\begin{itemize}
+  \item \textbf{\texttt{identity\_block\_init}}: Generates a \texttt{(n\_layers, n\_qubits, 3)} weight tensor where consecutive layer pairs cancel — layer $2k{+}1$ is set to the negative of layer $2k$ (exact inverse rotation), plus a small Gaussian perturbation $\epsilon{=}0.05$ to break the exact saddle. Applied to every VQC in the QLSTM via \texttt{apply\_identity\_init\_to\_qlstm}.
+  \item \textbf{\texttt{two\_stage\_ls\_warmup}}: Registers a forward hook on \texttt{model.fc\_out} to capture pre-projection features $\Phi \in \mathbb{R}^{N \times d}$ for the full training set in one frozen forward pass. Solves $w^* = (\Phi^\top\Phi + \lambda I)^{-1}\Phi^\top y$ analytically and copies $w^*$ into the final linear layer. Stage~2 is then ordinary gradient descent from this warm start.
+\end{itemize}
+
+\subsection*{Module 5 — S\&P 500 Data Loader (\texttt{src/data\_loader.py})}
+
+Downloads daily closing prices via \texttt{yfinance} (2020--2024, ${\sim}1000$ trading days), normalises by mean and standard deviation, and converts to sliding-window sequences of length 10. Caches the raw price array to avoid repeated API calls.
+
+\subsection*{Module 6 — Training \& Evaluation (\texttt{src/train\_stock.py}, \texttt{src/train\_sine.py})}
+
+Unified training loop (Adam, configurable lr and epochs) with timed wall-clock measurement. Evaluates MAE, RMSE, and MSE on a held-out test split. Generates loss-curve and prediction-overlay plots automatically.
+
+\subsection*{Module 7 — Trainability Table (\texttt{src/trainability\_table.py})}
+
+Reads the BP grid JSON and classifies each $(n, L)$ cell using fixed variance thresholds: Trainable ($\ge 10^{-2}$), Marginal ($10^{-4}$--$10^{-2}$), Barren ($< 10^{-4}$). Exports both a JSON and a \LaTeX{} tabular snippet.
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Observations}
+
+\subsection*{Barren Plateau Characterisation}
+
+\begin{center}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+\textbf{Layers} $\backslash$ \textbf{Qubits} & $n{=}2$ & $n{=}4$ & $n{=}6$ \\
+\midrule
+$L{=}1$ & $8.82\!\times\!10^{-2}$ \textit{(T)} & $2.61\!\times\!10^{-2}$ \textit{(T)} & $5.58\!\times\!10^{-3}$ \textit{(M)} \\
+$L{=}2$ & $6.57\!\times\!10^{-2}$ \textit{(T)} & $1.40\!\times\!10^{-2}$ \textit{(T)} & $8.53\!\times\!10^{-3}$ \textit{(M)} \\
+$L{=}4$ & $8.00\!\times\!10^{-2}$ \textit{(T)} & $2.35\!\times\!10^{-2}$ \textit{(T)} & $4.70\!\times\!10^{-3}$ \textit{(M)} \\
+\bottomrule
+\end{tabular}\\[3pt]
+\small T = Trainable ($\ge 10^{-2}$), M = Marginal ($10^{-4}$--$10^{-2}$)
+\end{center}
+
+Gradient variance drops ${\sim}15\times$ from $n{=}2$ to $n{=}6$, consistent with the $O(1/2^n)$ theoretical prediction. All configurations in the grid remain at least marginal; barren-plateau onset is expected around $n \approx 8$--$10$.
+
+\subsection*{S\&P 500 Stock Price Benchmark}
+
+\begin{center}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Model} & \textbf{MAE} & \textbf{RMSE} & \textbf{Params} & \textbf{Time (s)} \\
+\midrule
+Classical LSTM (h=8)          & 2.363 & 2.367 & 361 & 28.3 \\
+Classical LSTM matched (h=4)  & 2.000 & 2.001 & 117 & 26.3 \\
+QLSTM (random init)           & \textbf{1.242} & \textbf{1.249} & 125 & 528.0 \\
+QLSTM (identity-block init)   & 1.246 & 1.253 & 125 & 523.1 \\
+QLSTM (two-stage LS)          & 2.374 & 2.389 & 125 & 533.4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Key takeaways:
+
+\begin{itemize}
+  \item QLSTM (random init, $n{=}2$, $L{=}1$) outperforms the parameter-matched classical LSTM by \textbf{37\% in MAE} (1.242 vs 2.000) with a nearly identical parameter budget (125 vs 117).
+  \item Identity-block initialisation performs on par with random init at $n{=}2$. At this qubit count, BP is not yet active (Var $\sim 10^{-1}$), so the initialisation strategy makes no practical difference — which is exactly what theory predicts.
+  \item The two-stage LS warm-up \emph{degrades} test-set performance (MAE 2.374 $\approx$ classical baseline). The Stage~1 solution tightly fits the training window's quantum features; when Stage~2 then adjusts the quantum parameters, the classical readout becomes misaligned with the new features, and the combination generalises poorly on this non-stationary series. This is an honest null result and points to a concrete open problem (see Future Direction).
+\end{itemize}
+
+\subsection*{Repository}
+
+All code, plots, and this report are available at:\\
+\url{https://github.com/gautam2905/IQC-Project}
+
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Future Direction}
+
+\textbf{Regularised two-stage LS (proposed novel extension).} The null result on the LS warm-up reveals a fundamental tension: Stage~1 optimally fits the current quantum features, but Stage~2 moves those features, destroying the fit. One principled fix is to \emph{jointly} regularise the quantum parameters during Stage~2 to stay close to the feature distribution seen in Stage~1 — for example, by adding a Fisher-information penalty that penalises large changes in the circuit's output distribution. Alternatively, one could \emph{freeze the classical readout} after Stage~1 and only fine-tune the quantum parameters, keeping the linear projection anchored to the well-initialised region. Either variant would retain the smooth-basin benefit of the convex warm-up while avoiding the distribution-shift problem.
+
+\textbf{Scaling the BP sweep to $n \approx 20$.} The current grid stops at $n{=}6$ (marginal regime). Extending to $n{=}10$--$20$ on the classical simulator would produce a clean log-linear $O(1/2^n)$ curve, making the exponential decay visually unambiguous and quantitatively verifiable against the theoretical slope. This is purely a compute investment but would produce a compelling empirical plot.
+
+\textbf{Local vs global cost functions as a structural BP mitigation.} Larocca et al.\ show that global cost functions (measuring all qubits together) cause worse BPs than local ones (measuring one qubit at a time). QLSTM currently uses a global PauliZ sum. Replacing this with per-qubit measurements and aggregating classically is a low-effort architectural change that could substantially improve trainability at $n \ge 6$ without changing the circuit structure at all.
+
+\textbf{Hardware noise analysis.} All experiments here use a noiseless classical simulator (\texttt{default.qubit}). On real hardware, depolarising noise is another independent source of barren plateaus (Larocca et al., Source~4). Repeating the BP sweep with PennyLane's \texttt{default.mixed} device and a configurable error rate would characterise how quickly noise destroys trainability, which is the practically relevant question for near-term quantum devices.
+
+\textbf{Weather forecasting benchmark.} The Delhi and Jena Climate datasets were included as a stretch goal in the proposal. Running the same QLSTM vs classical LSTM comparison on a multi-variate meteorological time series would test whether the observed quantum advantage on S\&P~500 generalises beyond financial data, or is specific to the structure of that particular series.
 
 
 % ─── References ──────────────────────────────────────────────────────────────

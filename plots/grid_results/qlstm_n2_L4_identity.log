@@ -1,0 +1,2 @@
+[start] qlstm_n2_L4_identity  params=197
+[done]  qlstm_n2_L4_identity  MAE=1.6064  time=23.3 min

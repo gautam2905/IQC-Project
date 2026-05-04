@@ -1,0 +1,16 @@
+\begin{center}
+\small
+\begin{tabular}{@{}cc|cccc|c@{}}
+\toprule
+\textbf{n} & \textbf{L} & \textbf{Random} & \textbf{Identity} & \textbf{LS (vanilla)} & \textbf{LS (novel)} & \textbf{$\Delta$ (novel$-$LS)} \\
+\midrule
+2 & 1 & 1.242 & 1.246 & 2.374 & 2.378 & +0.004 \\
+2 & 2 & 2.314 & 2.352 & 0.205 & 0.204 & -0.001 \\
+2 & 4 & 1.728 & 1.606 & 0.227 & 0.253 & +0.025 \\
+4 & 1 & 0.959 & 0.949 & 0.209 & 0.208 & -0.001 \\
+4 & 2 & 2.260 & 2.096 & 1.481 & 1.481 & +0.000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Parallel wall time:} 20 QLSTM jobs ran concurrently; total wall clock = slowest single job = 27.8 min.

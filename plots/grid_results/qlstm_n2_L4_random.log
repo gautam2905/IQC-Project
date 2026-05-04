@@ -1,0 +1,2 @@
+[start] qlstm_n2_L4_random  params=197
+[done]  qlstm_n2_L4_random  MAE=1.7276  time=23.5 min

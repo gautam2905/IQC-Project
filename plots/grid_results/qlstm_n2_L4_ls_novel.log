@@ -1,0 +1,2 @@
+[start] qlstm_n2_L4_ls_novel  params=197
+[done]  qlstm_n2_L4_ls_novel  MAE=0.2527  time=23.1 min

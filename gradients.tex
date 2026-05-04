@@ -1,0 +1,620 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{booktabs}
+
+\definecolor{accentblue}{RGB}{30, 80, 160}
+\definecolor{codegray}{RGB}{240,240,240}
+
+\titleformat{\section}{\large\bfseries\color{accentblue}}{\thesection.}{0.5em}{}[\titlerule]
+\titleformat{\subsection}{\bfseries}{\thesubsection.}{0.5em}{}
+
+\hypersetup{colorlinks=true, linkcolor=accentblue, urlcolor=accentblue}
+
+\lstset{
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framesep=4pt,
+  xleftmargin=4pt,
+  language=Python,
+  showstringspaces=false
+}
+
+\title{\color{accentblue}\bfseries QLSTM: Gradients \& Training Mechanics\\[2pt]
+\large Reference Sheet for Presentation}
+\author{Gautam Gupta --- 2023220}
+\date{}
+
+\begin{document}
+\maketitle
+
+% =====================================================================
+\section{What is Trainable?}
+
+The QLSTM has \textbf{125 total trainable parameters} (with $n_q=2$, $L=1$, hidden$=4$),
+divided into three categories. Every one of these is registered with PyTorch via
+\texttt{nn.Parameter} or \texttt{nn.Linear}, so they all show up in
+\texttt{model.parameters()} and are updated by Adam in a single step.
+
+\subsection{(A) Classical pre-nets --- one per VQC}
+
+\begin{lstlisting}
+self.pre_net = nn.Linear(input_size, n_qubits)
+\end{lstlisting}
+
+For each gate VQC: $W \in \mathbb{R}^{n_q \times (\text{input}+\text{hidden})}$, $b \in \mathbb{R}^{n_q}$.
+
+With $\text{input}=1, \text{hidden}=4, n_q=2$: weights $5{\times}2 = 10$, bias $2$, $\Rightarrow$ \textbf{12 params per VQC}.
+
+Four VQCs $\Rightarrow$ \textbf{48 classical pre-net params total.}
+
+\subsection{(B) Quantum parameters (the actual circuit angles)}
+
+\begin{lstlisting}
+self.q_params = nn.Parameter(torch.randn(n_layers, n_qubits, 3) * 0.1)
+\end{lstlisting}
+
+Shape $(L, n_q, 3)$ --- three angles $(\alpha, \beta, \gamma)$ per qubit per layer,
+fed into the \texttt{Rot} gate inside \texttt{StronglyEntanglingLayers}:
+\[
+  \mathrm{Rot}(\alpha, \beta, \gamma) = R_Z(\gamma) \, R_Y(\beta) \, R_Z(\alpha)
+\]
+
+With $L=1, n_q=2$: $1 \cdot 2 \cdot 3 = 6$ angles per VQC, four VQCs $\Rightarrow$
+\textbf{24 quantum angles total.}
+
+\textit{These are the parameters that suffer from barren plateaus.}
+
+\subsection{(C) Classical post-nets + final readout}
+
+\begin{lstlisting}
+self.post_net = nn.Linear(n_qubits, output_size)   # per VQC
+self.fc_out   = nn.Linear(hidden_size, output_size) # once at top
+\end{lstlisting}
+
+Four post-nets at $4 \cdot (2 \cdot 4 + 4) = 48$ params,\footnote{Pre/post-net output dim equals \texttt{hidden\_size}=4 in our config.} plus \texttt{fc\_out} $= 5$ params.
+
+\subsection{Parameter budget summary}
+
+\[
+\underbrace{48}_{\text{4 pre-nets}} \;+\; \underbrace{24}_{\text{quantum angles}} \;+\; \underbrace{48}_{\text{4 post-nets}} \;+\; \underbrace{5}_{\text{fc\_out}} \;=\; \boxed{125 \text{ params}}
+\]
+
+\textbf{Only 19\% of the model is quantum.} The rest is classical glue.
+
+% =====================================================================
+\section{The Quantum Circuit: Forward Pass Equations}
+
+For one VQC call on input vector $x \in \mathbb{R}^{n_q}$ (already pre-net + tanh'd):
+
+\subsection{Step 1 --- Angle embedding}
+
+\[
+  |\psi_0\rangle = \bigotimes_{i=0}^{n_q - 1} R_Y(x_i)\,|0\rangle
+  \quad\text{where}\quad
+  R_Y(\theta) = \begin{pmatrix}\cos(\theta/2) & -\sin(\theta/2)\\ \sin(\theta/2) & \cos(\theta/2)\end{pmatrix}
+\]
+
+\subsection{Step 2 --- Strongly entangling layers}
+
+For each layer $\ell = 1, \dots, L$:
+\[
+  U_\ell(\theta_\ell) = U_{\text{CNOT-ring}} \cdot \prod_{i=0}^{n_q-1} \mathrm{Rot}(\alpha_{\ell,i}, \beta_{\ell,i}, \gamma_{\ell,i})_i
+\]
+
+Full circuit unitary:
+\[
+  U(\theta) = U_L(\theta_L) \cdots U_2(\theta_2) \, U_1(\theta_1)
+\]
+
+Final state:
+\[
+  |\psi(\theta, x)\rangle = U(\theta)\,|\psi_0(x)\rangle
+\]
+
+\subsection{Step 3 --- Measurement}
+
+\[
+  z_i(\theta, x) = \langle\psi(\theta, x)|\, Z_i \,|\psi(\theta, x)\rangle \in [-1, 1], \qquad i = 0, \dots, n_q - 1
+\]
+
+The output of the VQC is the vector $\mathbf{z}(\theta, x) = (z_0, \dots, z_{n_q-1})^\top$, which then feeds into \texttt{post\_net}.
+
+\paragraph{What is $z_i$, concretely?} After the circuit produces the final state $|\psi(\theta, x)\rangle$, we measure the Pauli-$Z$ observable on each qubit. The number $z_i$ is the \emph{expectation value} of that measurement on qubit $i$, where $Z_i$ means ``Pauli-$Z$ acting on qubit $i$, identity on every other qubit'':
+\[
+  Z_i \;=\; I \otimes I \otimes \cdots \otimes \underbrace{Z}_{\text{position } i} \otimes \cdots \otimes I
+\]
+
+Pauli-$Z$ has eigenvalues $+1$ on $|0\rangle$ and $-1$ on $|1\rangle$, so $z_i$ has a clean probabilistic interpretation:
+\[
+  z_i \;=\; P(\text{qubit } i = 0) \;-\; P(\text{qubit } i = 1) \;\in\; [-1, +1]
+\]
+It is a single real number summarising ``is qubit $i$ more likely to be 0 or 1, and by how much.''
+
+\paragraph{What the VQC actually outputs.} A VQC with $n_q$ qubits returns $n_q$ such numbers --- one expectation value per qubit:
+\[
+  \mathbf{z}(\theta, x) \;=\; \bigl(z_0,\; z_1,\; \dots,\; z_{n_q-1}\bigr) \;\in\; [-1, 1]^{n_q}
+\]
+In code (\texttt{src/qlstm.py:41}):
+\begin{lstlisting}
+return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+\end{lstlisting}
+That list comprehension is literally producing $[z_0, z_1, \dots, z_{n_q-1}]$.
+
+\paragraph{Why these are what we differentiate.} The vector $\mathbf{z}$ is the \emph{only} thing the quantum circuit hands back to the classical world --- it is the input to \texttt{post\_net}. Everything downstream (post-net $\to$ sigmoid $\to$ cell update $\to$ loss) is classical. So the quantum/classical boundary lives at $\mathbf{z}$, and PennyLane's job is exactly to compute $\partial z_i / \partial \theta_k$ at that boundary. Once those numbers exist, PyTorch's autograd chains them through to $\partial L / \partial \theta_k$.
+
+\paragraph{Concrete tiny example.} Suppose $n_q = 2$ and the final state happens to be the Bell state
+\[
+  |\psi\rangle = \tfrac{1}{\sqrt{2}}|00\rangle + \tfrac{1}{\sqrt{2}}|11\rangle.
+\]
+Then
+\[
+  z_0 = \langle\psi|Z_0|\psi\rangle = \tfrac{1}{2}(+1) + \tfrac{1}{2}(-1) = 0, \qquad
+  z_1 = \langle\psi|Z_1|\psi\rangle = 0.
+\]
+So the VQC outputs $\mathbf{z} = (0, 0)$ --- just two real numbers, which then go into the classical \texttt{post\_net}.
+
+\paragraph{Summary.}
+\begin{itemize}
+  \item $|\psi\rangle$ = the full $2^{n_q}$-dimensional quantum state, lives inside the simulator.
+  \item $z_i$ = a single real number in $[-1, 1]$, the expectation of $Z$ on qubit $i$.
+  \item $\mathbf{z}$ = the $n_q$-vector of these numbers, the actual classical output of the VQC.
+  \item Gradients $\partial z_i / \partial \theta_k$ are what PennyLane computes; everything else is autograd.
+\end{itemize}
+
+\subsection{State evolution --- what does the qubit register actually look like?}
+
+Starting from the all-zero register $|0\rangle^{\otimes n_q}$, the state evolves through three stages:
+
+\textbf{(a) After angle embedding} --- apply $R_Y(x_i)$ on each qubit:
+\[
+  |\psi_0(x)\rangle \;=\; \bigotimes_{i=0}^{n_q-1} R_Y(x_i)\,|0\rangle
+  \;=\; \bigotimes_{i=0}^{n_q-1}\Bigl(\cos\tfrac{x_i}{2}\,|0\rangle + \sin\tfrac{x_i}{2}\,|1\rangle\Bigr)
+\]
+This is still a \emph{product state}: no entanglement yet, just data loaded into single-qubit amplitudes.
+
+\textbf{(b) After one strongly-entangling layer} --- per-qubit \texttt{Rot} followed by a CNOT ring:
+\[
+  |\psi_1(\theta_1, x)\rangle \;=\; U_{\text{CNOT-ring}}\,\Bigl[\bigotimes_{i=0}^{n_q-1}\mathrm{Rot}(\alpha_{1,i}, \beta_{1,i}, \gamma_{1,i})\Bigr]\,|\psi_0(x)\rangle
+\]
+where $U_{\text{CNOT-ring}} = \text{CNOT}_{n_q-1, 0}\,\cdots\,\text{CNOT}_{1, 2}\,\text{CNOT}_{0, 1}$. After this layer the state is generally \emph{entangled} and no longer factorises across qubits.
+
+\textbf{(c) After all $L$ layers} --- the final state going into the measurement step:
+\[
+  \boxed{\;
+  |\psi(\theta, x)\rangle \;=\; \biggl[\prod_{\ell=1}^{L} U_{\text{CNOT-ring}}\,\bigotimes_{i=0}^{n_q-1}\mathrm{Rot}(\alpha_{\ell,i}, \beta_{\ell,i}, \gamma_{\ell,i})\biggr]\;\bigotimes_{i=0}^{n_q-1} R_Y(x_i)\,|0\rangle
+  \;}
+\]
+
+This is an entangled $n_q$-qubit state living in the full Hilbert space $\mathbb{C}^{2^{n_q}}$, jointly parameterised by the data $x$ and trainable angles $\theta$. It cannot in general be written as a tensor product of single-qubit states --- this is precisely what gives the VQC its expressive power, and also what causes barren plateaus when $n_q$ grows large (the state behaves more and more like a Haar-random vector in $\mathbb{C}^{2^{n_q}}$).
+
+The measurement step in \S2.3 then collapses this $2^{n_q}$-dimensional state down to $n_q$ classical numbers $z_i = \langle\psi|Z_i|\psi\rangle$, which are then handed to the classical \texttt{post\_net}.
+
+% =====================================================================
+\section{How Gradients are Computed}
+
+Three different gradient mechanisms run in different parts of the graph.
+The chain rule glues them together.
+
+\subsection{Mechanism 1 --- Standard PyTorch autograd (classical parts)}
+
+For \texttt{pre\_net}, \texttt{post\_net}, \texttt{fc\_out}, \texttt{tanh}, \texttt{sigmoid}, the cell-state update --- everything is just tensor ops. PyTorch builds the computation graph during the forward pass and reverse-walks it during \texttt{loss.backward()}.
+
+\subsection{Mechanism 2 --- Quantum gradients via \texttt{diff\_method="backprop"}}
+
+When autograd hits \texttt{self.circuit(x[i], self.q\_params)}, PennyLane takes over. With \texttt{diff\_method="backprop"} on the \texttt{default.qubit} simulator, PennyLane internally represents the circuit as a sequence of unitary matrix multiplications on a state vector, and backpropagates symbolically.
+
+It returns gradients with respect to \emph{both}:
+\[
+  \frac{\partial z_i}{\partial \theta} \quad\text{and}\quad \frac{\partial z_i}{\partial x}
+\]
+
+The second one is what allows the classical pre-net to receive gradient signal.
+
+\paragraph{What is the ``objective'' here, exactly?} The thing being differentiated at this stage is just the measurement output
+\[
+  z_i(\theta, x) = \langle\psi(\theta, x)|\, Z_i\, |\psi(\theta, x)\rangle
+\]
+treated as a function of $\theta$ (and of $x$). We are \emph{not} differentiating the loss yet --- the loss-gradient is built up later by the chain rule, using PyTorch autograd to stitch together all the classical pieces. PennyLane's job is just to deliver the partial $\partial z_i / \partial \theta_k$ at the quantum boundary.
+
+\paragraph{How \texttt{backprop} actually computes the gradient.} On a simulator, the quantum state is a complex vector $|\psi\rangle \in \mathbb{C}^{2^{n_q}}$ and every gate is a matrix multiplication $|\psi\rangle \mapsto U_k\,|\psi\rangle$. So the entire circuit is just a sequence of differentiable tensor operations:
+\[
+  |\psi(\theta, x)\rangle = U_L(\theta_L) \cdots U_2(\theta_2)\,U_1(\theta_1)\,|\psi_0(x)\rangle,
+  \qquad
+  z_i = \langle\psi|\,Z_i\,|\psi\rangle
+\]
+PennyLane registers each $U_\ell(\theta_\ell)$ inside PyTorch's autograd graph as a \texttt{torch.Tensor} matrix-multiply with \texttt{requires\_grad=True}. When \texttt{loss.backward()} is called, standard \emph{reverse-mode automatic differentiation} flows through:
+\begin{enumerate}
+  \item the final $z_i$, giving $\partial z_i / \partial |\psi\rangle$;
+  \item the chain $U_L \cdots U_1$, one matrix at a time;
+  \item at each $U_\ell(\theta_\ell)$, autograd uses the closed-form derivative (since $U = e^{-i\theta P/2}$ has a known symbolic derivative);
+  \item out comes $\partial z_i / \partial \theta_k$ for \emph{all} angles in one reverse sweep.
+\end{enumerate}
+
+\paragraph{Why it is exact.} There is no finite-difference approximation anywhere. Every step is an analytic tensor operation, just like differentiating $\sin\theta$ symbolically rather than numerically. The same exactness as classical \texttt{nn.Linear} backprop --- only the operations happen to be complex matrix multiplications instead of real ones.
+
+\paragraph{Why we use it in this project.} On the simulator, \texttt{backprop} is \emph{much} faster than parameter-shift (one reverse sweep vs.\ $2P$ extra forward passes), and gives mathematically identical gradients. Since we are studying trainability and barren plateaus, not benchmarking on real hardware, the cheaper method suffices. See \texttt{src/qlstm.py:34}.
+
+\subsection{Mechanism 3 --- Parameter-shift rule (real hardware)}
+
+If you change \texttt{diff\_method="backprop"} to \texttt{diff\_method="parameter-shift"}, PennyLane computes each quantum gradient via the famous shift identity:
+\[
+  \boxed{\;\frac{\partial z_i}{\partial \theta_k} \;=\; \frac{1}{2}\Bigl[\, z_i\bigl(\theta + \tfrac{\pi}{2}\,\mathbf{e}_k\bigr) \;-\; z_i\bigl(\theta - \tfrac{\pi}{2}\,\mathbf{e}_k\bigr)\,\Bigr]\;}
+\]
+
+\paragraph{What this rule says, in words.} For \emph{each} quantum angle $\theta_k$ that needs a gradient, we run the \emph{entire circuit twice}:
+\begin{enumerate}
+  \item Once with $\theta_k$ replaced by $\theta_k + \pi/2$, all other angles fixed --- get measurement $z^{(+)}$.
+  \item Once with $\theta_k$ replaced by $\theta_k - \pi/2$, all other angles fixed --- get measurement $z^{(-)}$.
+\end{enumerate}
+Then $\partial z_i / \partial \theta_k = \tfrac{1}{2}(z^{(+)} - z^{(-)})$. That is the gradient. No finite-difference approximation, no Taylor expansion --- it is an algebraic identity, not a numerical estimate.
+
+\paragraph{Why it is exact (one-line proof).} For a gate of the form $U(\theta) = e^{-i\theta P/2}$ where $P$ is a Pauli (so $P^2 = I$):
+\[
+  U(\theta) = \cos(\theta/2)\,I \;-\; i\sin(\theta/2)\,P
+\]
+Compute $z(\theta) = \langle\psi(\theta)|\,O\,|\psi(\theta)\rangle$ and take $\partial/\partial\theta$. The result, after using $\sin' = \cos$ and the addition formulas, is \emph{exactly}
+\[
+  \frac{\partial z}{\partial \theta} = \tfrac{1}{2}\bigl[z(\theta + \pi/2) - z(\theta - \pi/2)\bigr].
+\]
+The trick is that a $\pm\pi/2$ shift swaps $\sin \leftrightarrow \cos$, so the derivative reduces to a finite combination of shifted evaluations.
+
+\paragraph{Cost.} Two extra full circuit evaluations \emph{per quantum parameter}. With 24 quantum angles in our QLSTM, that is 48 extra forward passes for one backward step. Multiply by sequence length 10 and 4 gates per cell and you understand why running QLSTM on real hardware is brutally slow.
+
+\paragraph{Chain rule still applies.} Parameter-shift only computes $\partial z_i / \partial \theta_k$. To get the loss gradient, the standard chain rule kicks in:
+\[
+  \frac{\partial L}{\partial \theta_k} \;=\; \underbrace{\frac{\partial L}{\partial z_i}}_{\text{from PyTorch autograd}} \cdot \underbrace{\frac{\partial z_i}{\partial \theta_k}}_{\text{parameter-shift rule}}
+\]
+PennyLane handles both pieces and hands the final scalar gradient to PyTorch.
+
+\subsection{\texttt{backprop} vs.\ parameter-shift --- side-by-side}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+                            & \texttt{backprop}                          & parameter-shift \\
+\midrule
+Where it works              & Simulator only                              & Simulator + real hardware \\
+Cost / backward             & 1 reverse-mode sweep                        & $2P$ extra circuit runs \\
+Memory                      & $O(2^{n_q})$ (state vector stored)          & $O(1)$ (only run circuits) \\
+Exactness                   & Exact (symbolic differentiation)            & Exact (algebraic identity) \\
+Why exact                   & Direct chain rule on matrix ops             & $\sin \leftrightarrow \cos$ at $\pm\pi/2$ \\
+Real-hardware compatible    & No                                           & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{One sentence each:}
+\begin{itemize}
+  \item \texttt{backprop} is ``I have full access to the simulator's state vector, so I'll just chain-rule through the matrix multiplications.''
+  \item parameter-shift is ``I have only a black-box quantum device that runs circuits and measures; I'll exploit the algebraic identity $\sin \leftrightarrow \cos$ to recover exact gradients with two extra runs per parameter.''
+\end{itemize}
+
+Both produce the same numerical gradient. We use \texttt{backprop} because we are not on hardware.
+
+% =====================================================================
+\section{The Full Chain Rule (End-to-End)}
+
+For a single training sample, sequence length $T$, the gradient of the loss
+$L$ with respect to one quantum angle $\theta_k$ inside \texttt{vqc\_forget} is:
+
+\[
+  \frac{\partial L}{\partial \theta_k} = \sum_{t=1}^{T}
+  \underbrace{\frac{\partial L}{\partial \hat{y}}}_{\text{loss head}}
+  \cdot \underbrace{\frac{\partial \hat{y}}{\partial h_T}}_{\text{fc\_out}}
+  \cdot \underbrace{\frac{\partial h_T}{\partial h_t}}_{\text{BPTT}}
+  \cdot \underbrace{\frac{\partial h_t}{\partial f_t}}_{\text{sigmoid + cell update}}
+  \cdot \underbrace{\frac{\partial f_t}{\partial \mathbf{z}_t}}_{\text{post\_net}}
+  \cdot \underbrace{\frac{\partial \mathbf{z}_t}{\partial \theta_k}}_{\text{PennyLane}}
+\]
+
+\textbf{Reading the chain (right to left):}
+\begin{enumerate}
+  \item \texttt{loss.backward()} starts at the loss.
+  \item Autograd flows through \texttt{fc\_out}, the unrolled time loop (BPTT), the cell-state update, the sigmoid, and the post-net --- all classical.
+  \item At the boundary $\partial \mathbf{z}_t / \partial \theta_k$, \textbf{PennyLane handles the quantum part} via \texttt{diff\_method}.
+  \item Gradient also flows back through $\partial \mathbf{z}_t / \partial x$ into the pre-net.
+\end{enumerate}
+
+\subsection{BPTT --- backprop through time}
+
+Because \texttt{QLSTM.forward} runs a Python loop \texttt{for t in range(seq\_len)} (line 139), the cell is unrolled $T$ times in the computation graph. The gradient $\partial h_T / \partial h_t$ recursively expands as:
+\[
+  \frac{\partial h_T}{\partial h_t} = \prod_{\tau=t+1}^{T} \frac{\partial h_\tau}{\partial h_{\tau-1}}
+\]
+
+With $T = 10$ and 4 gates, each backward pass executes the quantum-gradient call \textbf{$10 \times 4 = 40$ times per sample}.
+
+% =====================================================================
+\section{The Barren Plateau Problem (mathematically)}
+
+\subsection{The killer result --- McClean et al.\ 2018}
+
+For a randomly-initialised parameterised quantum circuit with $n$ qubits drawn from a unitary 2-design:
+\[
+  \mathbb{E}_{\theta}\!\left[\frac{\partial L}{\partial \theta_k}\right] = 0
+  \quad\text{and}\quad
+  \boxed{\;\mathrm{Var}_{\theta}\!\left[\frac{\partial L}{\partial \theta_k}\right] \in O\!\left(\frac{1}{2^n}\right)\;}
+\]
+
+The mean is zero (so gradients are signed noise), and the variance \emph{decays exponentially} with qubit count.
+
+\subsection{What this means for Adam}
+
+Adam's update rule:
+\[
+  \theta \leftarrow \theta - \eta \cdot \frac{\hat m_t}{\sqrt{\hat v_t} + \varepsilon}
+  \qquad
+  \hat m_t \approx \mathbb{E}[g_t], \;\; \hat v_t \approx \mathbb{E}[g_t^2]
+\]
+
+If $\mathrm{Var}[g] \to 0$, then $\hat v_t \to 0$ and gradients are dominated by numerical noise. Adam moves the quantum angles by negligible amounts $\Rightarrow$ they stay frozen near random init $\Rightarrow$ training fails.
+
+\textbf{Crucially, the classical parameters keep updating} --- they're not subject to BP. So you'd see the loss drop a little (from classical fits) and then stall, with the quantum block never having contributed.
+
+\subsection{Empirical measurement (from \texttt{src/bp\_full\_grid.py})}
+
+For each $(n, L)$ pair:
+\begin{enumerate}
+  \item Sample $\theta \sim U[0, 2\pi]^P$ and a random input.
+  \item Compute one forward + backward pass to get $\nabla_\theta L \in \mathbb{R}^P$.
+  \item Repeat 200 times.
+  \item Compute per-parameter variance, then mean across parameters:
+  \[
+    \widehat{\mathrm{Var}}[\nabla L] = \frac{1}{P} \sum_{k=1}^{P}
+      \underbrace{\frac{1}{N-1} \sum_{s=1}^{N} \bigl(g_k^{(s)} - \bar g_k\bigr)^2}_{\text{sample variance for parameter } k}
+  \]
+\end{enumerate}
+
+\textbf{Why mean across parameters and not just $\theta_0$:} if $\theta_0$ controls a $Z$-rotation immediately before a $Z$ measurement, then $[Z, Z] = 0$ gives a structural zero gradient that has nothing to do with BP. Averaging avoids this artefact.
+
+% =====================================================================
+\section{The Optimiser Step}
+
+Once gradients exist, the optimiser doesn't care where they came from:
+\begin{lstlisting}
+optimizer = torch.optim.Adam(model.parameters(), lr=0.02)
+loss.backward()      # populates .grad on all 125 Parameters
+optimizer.step()     # one Adam update for all of them
+\end{lstlisting}
+
+\texttt{model.parameters()} returns all classical \emph{and} quantum leaf tensors indistinguishably. Adam applies the same update rule to every one. There is no special ``quantum optimiser.''
+
+% =====================================================================
+\section{Sanity-check Snippet (Live Demo)}
+
+Run this during the talk to show all gradients flow:
+
+\begin{lstlisting}
+model = QLSTM(input_size=1, hidden_size=4, output_size=1,
+              n_qubits=2, n_layers=1)
+loss = model(torch.randn(2, 10, 1)).sum()
+loss.backward()
+
+for name, p in model.named_parameters():
+    print(f"{name:50s} shape={tuple(p.shape)}  "
+          f"grad_norm={p.grad.norm().item():.4f}")
+\end{lstlisting}
+
+You will see:
+\begin{itemize}
+  \item All 125 parameters have non-zero gradients $\Rightarrow$ training works end-to-end.
+  \item \texttt{q\_params} gradients are smaller than classical ones $\Rightarrow$ foreshadows BP.
+  \item Each VQC's pre-net, q\_params, and post-net appear separately in the list.
+\end{itemize}
+
+% =====================================================================
+\section{One-Slide Summary}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Component} & \textbf{Gradient by} & \textbf{Count} \\
+\midrule
+4 pre-nets       & PyTorch autograd                         & 48 params \\
+4 VQC angle sets & PennyLane (\texttt{backprop} or shift)   & 24 params \\
+4 post-nets      & PyTorch autograd                         & 48 params \\
+1 fc\_out        & PyTorch autograd                         & 5 params \\
+\midrule
+\textbf{Total}   & all glued by chain rule                  & \textbf{125 params} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{The whole hybrid network trains with one \texttt{loss.backward()} + one \texttt{optimizer.step()}.}
+PennyLane is the only ``unusual'' piece, and it just provides the gradient
+$\partial \mathbf{z} / \partial \theta$ at the quantum boundary. Everything else
+is classical deep learning.
+
+% =====================================================================
+\section{Two-Stage Least-Squares Mitigation --- Simple Explanation}
+
+\subsection{The setup in one picture}
+
+The QLSTM has this shape:
+\[
+  \text{input } X \;\xrightarrow{\text{QLSTM cell}}\; h_T \;\xrightarrow{\texttt{fc\_out}}\; \hat y
+\]
+Everything before \texttt{fc\_out} is non-linear (and contains the quantum stuff). \texttt{fc\_out} is just one linear layer:
+\[
+  \hat y \;=\; \texttt{fc\_out}(h_T) \;=\; w^\top h_T + b
+\]
+
+\textbf{Key observation:} if we \emph{freeze} the QLSTM cell, then training the model is just \emph{linear regression} from $h_T$ to $\hat y$. Linear regression has a closed-form solution. No gradient descent needed.
+
+\subsection{What is $\Phi$?}
+
+$\Phi$ is just the matrix of \textbf{$h_T$ values}, one row per training sample.
+
+For our S\&P 500 setup:
+\begin{itemize}
+  \item Training samples: $N = 80$
+  \item Hidden size: $d = 4$
+\end{itemize}
+
+So for each training sample $i$, the QLSTM eats the 10-day price sequence and spits out a 4-dimensional vector $h_T^{(i)} \in \mathbb{R}^4$. Stack all 80 of them:
+\[
+  \Phi \;=\;
+  \begin{pmatrix}
+    h_T^{(1)\top} \\
+    h_T^{(2)\top} \\
+    \vdots \\
+    h_T^{(80)\top}
+  \end{pmatrix}
+  \;\in\; \mathbb{R}^{80 \times 4}
+\]
+
+\textbf{In one sentence:} $\Phi$ is what comes out of the QLSTM, before the final linear layer, for every training sample.
+
+\subsection{What is $y$?}
+
+$y$ is the matrix of \textbf{true labels} you want to predict. For S\&P 500, the label is the next-day price (one number per sample):
+\[
+  y \;=\;
+  \begin{pmatrix}
+    y^{(1)} \\
+    y^{(2)} \\
+    \vdots \\
+    y^{(80)}
+  \end{pmatrix}
+  \;\in\; \mathbb{R}^{80 \times 1}
+\]
+
+\textbf{In one sentence:} $y$ is just the training labels (true next-day prices), stacked.
+
+\subsection{The closed-form solution}
+
+We want to find weights $w \in \mathbb{R}^{4 \times 1}$ such that
+\[
+  \Phi w \;\approx\; y.
+\]
+Schematically:
+\[
+  \underbrace{\begin{pmatrix} \cdot\;\cdot\;\cdot\;\cdot \\ \cdot\;\cdot\;\cdot\;\cdot \\ \vdots \\ \cdot\;\cdot\;\cdot\;\cdot \end{pmatrix}}_{\Phi:\;80 \times 4}
+  \;
+  \underbrace{\begin{pmatrix} w_1 \\ w_2 \\ w_3 \\ w_4 \end{pmatrix}}_{w:\;4 \times 1}
+  \;\approx\;
+  \underbrace{\begin{pmatrix} y^{(1)} \\ y^{(2)} \\ \vdots \\ y^{(80)} \end{pmatrix}}_{y:\;80 \times 1}
+\]
+
+This is just linear regression. Solving the ridge version (with $\lambda I$ for stability):
+\[
+  \boxed{\;w^* \;=\; \bigl(\Phi^\top \Phi + \lambda I\bigr)^{-1}\,\Phi^\top y\;}
+\]
+
+That gives the best 4 numbers $(w_1, w_2, w_3, w_4)$. We copy them into \texttt{fc\_out.weight}. Done with Stage 1.
+
+\subsection{Stage 2 --- now train normally}
+
+After Stage 1, we have a great \texttt{fc\_out}. Stage 2 just runs normal Adam training on \emph{all} parameters (quantum + classical), exactly like the random-init baseline. The only difference: we start from a better point.
+
+\subsection{Why it fails on S\&P 500}
+
+Here is the simple version of the problem:
+
+\textbf{Stage 1 fits $w$ to the features that the \emph{starting} (random) quantum parameters happen to produce.}
+
+Call those features $\Phi_0$.
+
+\textbf{Stage 2 changes the quantum parameters.}
+
+Once the quantum parameters move, the features change too. Call them $\Phi_t$. So:
+\[
+  w^* \;\;\text{was optimal for}\;\; \Phi_0, \qquad \text{but now we have}\;\; \Phi_t \neq \Phi_0.
+\]
+
+The carefully-tuned \texttt{fc\_out} is no longer matched to the features it sees. We have basically broken the warm-start. On S\&P 500 (which is non-stationary, so over-fitting is dangerous), this hurts:
+
+\begin{center}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Method} & \textbf{Test MAE} \\
+\midrule
+Random init QLSTM         & 1.242 \\
+Identity-block init QLSTM & 1.246 \\
+\textbf{Two-stage LS warm-up} & \textbf{2.374} \;(worse!) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{What we did novel --- the fix}
+
+The diagnosis is: \emph{features drift away from where Stage 1 solved.}
+
+The fix is: \textbf{add a penalty that keeps the features from drifting.}
+
+We \textbf{save $\Phi_0$} after Stage 1. Then during Stage 2, at every training step, we compute the current features $\Phi_t$ and add a penalty if they have moved:
+
+\[
+  \boxed{\;
+  L_{\text{total}}(\theta) \;=\;
+  \underbrace{\|\hat y - y\|^2}_{\text{usual MSE}}
+  \;+\;
+  \lambda_{\text{feat}} \cdot \underbrace{\|\Phi_t - \Phi_0\|^2}_{\text{don't drift!}}
+  \;}
+\]
+
+In words: ``Train normally, but also pay a price every time the QLSTM features stray from where they were in Stage 1.''
+
+\paragraph{In code} (\texttt{src/mitigations.py:train\_with\_feature\_penalty}):
+\begin{lstlisting}
+def hook(mod, inp, out):
+    captured["features"] = inp[0]   # KEEP gradient (no .detach())
+
+handle = model.fc_out.register_forward_hook(hook)
+
+for _ in range(epochs):
+    pred       = model(X)                          # forward pass
+    data_loss  = loss_fn(pred, y)
+    Phi_t      = captured["features"]              # current features
+    feat_pen   = ((Phi_t - Phi_0) ** 2).mean()
+    total      = data_loss + feature_lambda * feat_pen
+    total.backward()                               # gradient flows
+    opt.step()                                     # quantum + classical updated
+\end{lstlisting}
+
+The \emph{key} line: in Stage 1's hook we used \texttt{inp[0].detach()} (we just wanted the numbers). In Stage 2 we do \textbf{not} detach --- so the penalty's gradient flows back through PennyLane into the quantum angles. Adam then nudges $\theta_q$ to keep the features stable.
+
+\subsection{Why this is novel}
+
+\begin{itemize}
+  \item The original Boabang \& Gyamerah paper (2026) does Stage 2 as plain Adam --- exactly the recipe that broke for us.
+  \item None of the 5 papers I cite use a feature-stability penalty. It came directly from looking at \emph{my own} failed experiment and asking ``what is going wrong?''
+  \item It is implemented and runnable in \texttt{src/mitigations.py} (functions \texttt{two\_stage\_ls\_novel\_warmup} and \texttt{train\_with\_feature\_penalty}).
+\end{itemize}
+
+\paragraph{Three behaviours from one knob.} The hyper-parameter $\lambda_{\text{feat}}$ controls everything:
+\begin{itemize}
+  \item $\lambda_{\text{feat}} = 0$ $\;\Rightarrow\;$ original (broken) two-stage LS.
+  \item $\lambda_{\text{feat}} = \infty$ $\;\Rightarrow\;$ features frozen $\;\Rightarrow\;$ only \texttt{fc\_out} can move (pure linear regression on random quantum features).
+  \item $\lambda_{\text{feat}}$ moderate $\;\Rightarrow\;$ keeps the warm-start \emph{and} lets the quantum block adapt slowly.
+\end{itemize}
+
+\subsection{Side-by-side}
+
+\begin{center}
+\begin{tabular}{@{}p{0.42\textwidth}p{0.42\textwidth}@{}}
+\toprule
+\textbf{Original two-stage LS} & \textbf{Our novel variant} \\
+\midrule
+Stage 1: solve $w^* = (\Phi_0^\top\Phi_0 + \lambda I)^{-1}\Phi_0^\top y$ & Same Stage 1, but \emph{also save} $\Phi_0$ \\
+Stage 2: plain Adam on MSE & Stage 2: Adam on $\text{MSE} + \lambda_{\text{feat}} \|\Phi_t - \Phi_0\|^2$ \\
+Quantum features drift freely & Quantum features pulled back toward Stage-1 \\
+Hurts on S\&P 500 (MAE 2.374) & Designed to keep the warm-start gain \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{One-line takeaway.} Stage 1 is just ridge regression: $\Phi$ = QLSTM features for all training samples, $y$ = true labels, $w^* = (\Phi^\top\Phi + \lambda I)^{-1}\Phi^\top y$. Stage 2 of the original paper breaks the Stage 1 fit because the features drift. Our novel fix saves $\Phi_0$ and adds $\lambda_{\text{feat}}\|\Phi_t - \Phi_0\|^2$ to the loss so they cannot drift.
+
+\end{document}

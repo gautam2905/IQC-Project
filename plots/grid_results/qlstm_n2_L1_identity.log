@@ -1,0 +1,2 @@
+[start] qlstm_n2_L1_identity  params=125
+[done]  qlstm_n2_L1_identity  MAE=1.2460  time=9.5 min

@@ -123,6 +123,124 @@ def two_stage_ls_warmup(model, X_train, y_train, ridge=1e-2):
     return model
 
 
+# ============================================================================
+# Strategy 3 (NOVEL): Feature-stability-regularised two-stage LS
+# ============================================================================
+#
+# Motivation. The vanilla two-stage LS warm-up (Boabang & Gyamerah, 2026) fits
+# the classical readout to the *current* quantum feature matrix Phi_0 in
+# closed form. As Stage 2 proceeds, gradient descent updates the quantum
+# parameters and Phi drifts; the carefully-fitted readout becomes misaligned
+# and the model overfits the training window. We observed this directly in
+# our S&P 500 benchmark (LS warm-up MAE = 2.374 vs random-init MAE = 1.242).
+#
+# Novel fix. Add a penalty that keeps Phi_t close to Phi_0 during Stage 2:
+#
+#     L_total = MSE(f(X), y) + lambda * mean( (Phi_t - Phi_0)^2 )
+#
+# This is a cheap surrogate for the Fisher-information penalty proposed in
+# the report's "Future Direction" section. It explicitly ties the quantum
+# parameter updates to the feature distribution that the analytic readout
+# was solved against, retaining the convex warm-start benefit while guarding
+# against the distribution-shift failure mode.
+# ============================================================================
+
+
+def _capture_features(model, X):
+    """One frozen forward pass; return the features that flow into fc_out."""
+    captured = {}
+
+    def hook(mod, inp, out):
+        captured["features"] = inp[0].detach()
+
+    handle = model.fc_out.register_forward_hook(hook)
+    model.eval()
+    with torch.no_grad():
+        _ = model(X)
+    handle.remove()
+    return captured["features"]  # tensor (N, hidden)
+
+
+def two_stage_ls_novel_warmup(model, X_train, y_train, ridge=1e-2):
+    """
+    Stage 1 of the NOVEL mitigation. Identical analytic readout solve as the
+    vanilla method, but additionally caches the Stage-1 feature matrix Phi_0
+    so the caller can use it as a regulariser during Stage 2.
+
+    Returns Phi_0 (torch.Tensor, shape (N, hidden_size)). The model's
+    fc_out has been updated in place with the LS solution.
+    """
+    model.eval()
+    captured = {}
+
+    def hook(mod, inp, out):
+        captured["features"] = inp[0].detach().cpu().numpy()
+
+    handle = model.fc_out.register_forward_hook(hook)
+    with torch.no_grad():
+        _ = model(X_train)
+    handle.remove()
+
+    Phi = captured["features"]
+    y = y_train.detach().cpu().numpy()
+
+    d = Phi.shape[1]
+    A = Phi.T @ Phi + ridge * np.eye(d, dtype=np.float32)
+    B = Phi.T @ y
+    w_star = np.linalg.solve(A, B)
+    bias = (y - Phi @ w_star).mean(axis=0)
+
+    with torch.no_grad():
+        model.fc_out.weight.copy_(torch.tensor(w_star.T, dtype=torch.float32))
+        model.fc_out.bias.copy_(torch.tensor(bias, dtype=torch.float32))
+
+    Phi_0 = torch.tensor(Phi, dtype=torch.float32)
+    model.train()
+    return Phi_0
+
+
+def train_with_feature_penalty(model, X, y, Phi_0, epochs, lr,
+                                feature_lambda=1.0):
+    """
+    Stage 2 of the NOVEL mitigation. Standard Adam optimisation with the
+    additional feature-stability term lambda * mean((Phi_t - Phi_0)^2).
+
+    Phi_t is captured via a forward hook on model.fc_out at every step, so
+    the penalty is differentiable end-to-end through the quantum parameters.
+
+    Returns (training_loss_list, wall_time_seconds). The reported per-epoch
+    loss is the MSE on the data ONLY (not including the penalty), so the
+    curve is directly comparable to the other mitigations.
+    """
+    import time
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+
+    captured = {}
+
+    def hook(mod, inp, out):
+        captured["features"] = inp[0]  # keep grad — DO NOT detach
+
+    handle = model.fc_out.register_forward_hook(hook)
+
+    losses = []
+    t0 = time.time()
+    for _ in range(epochs):
+        model.train()
+        opt.zero_grad()
+        pred = model(X)
+        data_loss = loss_fn(pred, y)
+        Phi_t = captured["features"]
+        feat_pen = ((Phi_t - Phi_0) ** 2).mean()
+        total = data_loss + feature_lambda * feat_pen
+        total.backward()
+        opt.step()
+        losses.append(float(data_loss.item()))
+
+    handle.remove()
+    return losses, time.time() - t0
+
+
 if __name__ == "__main__":
     # Quick sanity checks
     import sys, os
